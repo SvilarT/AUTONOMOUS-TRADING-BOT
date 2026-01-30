@@ -1,0 +1,57 @@
+name: Backend CI (Python)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'main.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'main.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'  # Match your version; change if needed
+
+    - name: Install uv (if using uv for deps)
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Install dependencies
+      working-directory: backend
+      run: |
+        uv sync --frozen   # or uv pip install -r requirements.txt if not using uv/pyproject
+        # If no uv: pip install -r requirements.txt
+
+    - name: Lint with flake8 (optional)
+      working-directory: backend
+      run: |
+        uv pip install flake8
+        flake8 . || true   # continue even if lint warnings
+
+    - name: Run tests (if you have them)
+      working-directory: backend
+      run: |
+        # pytest tests/   # uncomment if you add pytest
+        echo "No tests configured yet - add pytest later"
+
+    - name: Smoke check server.py (basic run)
+      working-directory: backend
+      run: python -m py_compile server.py   # or your entrypoint file
