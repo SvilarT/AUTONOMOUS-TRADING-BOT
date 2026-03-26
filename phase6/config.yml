@@ -1,0 +1,36 @@
+# Configuration for Phase 6 trading bot demonstration.
+
+# Register strategy plugins.  Strategies are loaded in the order listed.
+strategies:
+  # Existing simple moving average strategy from previous phases.
+  - module: phase6.plugins.sample_strategy
+    class: SimpleMovingAverageStrategy
+    params:
+      short_period: 10
+      long_period: 30
+  # New machine‑learning momentum strategy.  No constructor parameters
+  # are required, but a params block can be provided for future models.
+  - module: phase6.plugins.ml_strategy
+    class: MLStrategy
+
+# Register connectors.  For demonstration we continue to use mock
+# exchanges; replace these with real connectors (e.g. ``binance_connector``)
+# and supply API credentials via the ``params`` section in production.
+connectors:
+  - module: phase6.plugins.mock_binance_connector
+    class: MockBinanceConnector
+    params:
+      base_prices:
+        BTC-USD: 45000.0
+        ETH-USD: 2500.0
+  - module: phase6.plugins.mock_coinbase_connector
+    class: MockCoinbaseConnector
+    params:
+      base_prices:
+        BTC-USD: 45500.0
+        ETH-USD: 2550.0
+
+# Risk preferences.  The risk profile (conservative, moderate, aggressive)
+# scales exposure and drawdown limits in the ``RiskManager``.
+risk:
+  profile: moderate

@@ -1,0 +1,72 @@
+# Configuration for Phase 12 trading bot with staged deployment, live dashboard and feature flags.
+
+# Register strategy plugins.  Strategies are loaded in the order listed.
+strategies:
+  # Existing simple moving average strategy from previous phases.
+  - module: phase12.plugins.sample_strategy
+    class: SimpleMovingAverageStrategy
+    params:
+      short_period: 10
+      long_period: 30
+  # Machine‑learning momentum strategy introduced in Phase 4.  No
+  # constructor parameters are required, but a params block can be
+  # provided for future models.
+  - module: phase12.plugins.ml_strategy
+    class: MLStrategy
+
+# Register connectors.  For demonstration we continue to use mock
+# exchanges; replace these with real connectors (e.g. ``binance_connector``)
+# and supply API credentials via the ``params`` section in production.
+connectors:
+  - module: phase12.plugins.mock_binance_connector
+    class: MockBinanceConnector
+    params:
+      base_prices:
+        BTC-USD: 45000.0
+        ETH-USD: 2500.0
+  - module: phase12.plugins.mock_coinbase_connector
+    class: MockCoinbaseConnector
+    params:
+      base_prices:
+        BTC-USD: 45500.0
+        ETH-USD: 2550.0
+
+# Environment settings determine whether the bot operates in paper mode
+# (simulation) or live mode.  In paper mode the bot interacts with
+# mock connectors and does not execute real trades.  Live mode would
+# require fully functional connectors and custody integration.
+environment:
+  mode: paper
+
+# Feature flags allow staged rollout of new functionality.  Each flag
+# toggles a specific feature on or off.  During Phase 11 you can
+# gradually enable experimental modules for a subset of users.
+features:
+  beta_ml_strategy: false
+  advanced_risk_dashboard: false
+
+# Risk preferences.  The risk profile (conservative, moderate, aggressive)
+# scales exposure and drawdown limits in the ``RiskManager``.
+risk:
+  profile: moderate
+
+# Secrets management configuration.  In a production system this
+# section would include connection details for your secrets manager
+# (e.g. Vault address, authentication token).  The current
+# implementation uses environment variables and an in‑memory store.
+secrets:
+  provider: env
+  vault_address: ""
+
+# Custody configuration.  Set `provider` to `mock` for development or
+# to a real custody provider name when integrating hardware wallets or
+# custodial services.
+custody:
+  provider: mock
+
+# Compliance configuration for KYC/AML.  Configure providers and
+# thresholds here.  The AML threshold controls at what transaction
+# amount suspicious activity is flagged.
+compliance:
+  kyc_provider: stub
+  aml_threshold: 10000.0

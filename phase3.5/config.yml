@@ -1,0 +1,23 @@
+# Example configuration for the refactored trading bot.
+strategies:
+  - module: phase2.plugins.sample_strategy
+    class: SimpleMovingAverageStrategy
+    params:
+      short_period: 10
+      long_period: 30
+
+connectors:
+  # Binance‑like connector with low fees
+  - module: phase2.plugins.mock_binance_connector
+    class: MockBinanceConnector
+    params:
+      base_prices:
+        BTC-USD: 44500.0
+        ETH-USD: 2475.0
+  # Coinbase‑like connector with higher fees
+  - module: phase2.plugins.mock_coinbase_connector
+    class: MockCoinbaseConnector
+    params:
+      base_prices:
+        BTC-USD: 45200.0
+        ETH-USD: 2520.0
