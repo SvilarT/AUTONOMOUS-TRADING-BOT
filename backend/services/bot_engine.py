@@ -47,13 +47,40 @@ class BotEngine:
         if not config or not config.get("is_active"):
             return
 
+        await self.portfolio.ensure_account_state(user_id)
         positions = await self.db.positions_v2.find({"user_id": user_id}).to_list(100)
         state = await self.db.portfolio_state.find_one({"user_id": user_id}) or {}
-
         symbols = config.get("symbols", ["BTC-USD"])
+
+        price_map = {}
+        for symbol in symbols:
+            try:
+                current = await self.market.get_current_price(symbol)
+                price_map[symbol] = float(current.get("price", 0.0))
+            except Exception as exc:
+                logger.warning(f"Skipping risk mark for {symbol}: {exc}")
+
+        snapshot = await self.portfolio.update_risk_snapshot(user_id, price_map)
+        kill = self.risk.should_kill_switch({
+            "daily_loss_pct": max(0.0, -float(snapshot.get("daily_pnl", 0.0)) / float(snapshot.get("max_equity", 1.0))),
+            "drawdown_pct": float(snapshot.get("current_drawdown", 0.0)),
+        })
+        if kill.get("triggered"):
+            await self.db.bot_configs.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "is_active": False,
+                    "halt_reason": kill.get("reason"),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            logger.warning(f"Bot halted for {user_id}: {kill.get('reason')}")
+            return
 
         for symbol in symbols:
             await self.process_symbol(user_id, symbol, positions, state)
+            positions = await self.db.positions_v2.find({"user_id": user_id}).to_list(100)
+            state = await self.db.portfolio_state.find_one({"user_id": user_id}) or {}
 
     async def process_symbol(self, user_id, symbol, positions, state):
         hist = await self.market.get_historical_data(symbol, periods=120)
@@ -83,8 +110,9 @@ class BotEngine:
         )
 
         if allocation["action"] == "BUY" and not position:
+            metrics = self.risk.portfolio_metrics(state, positions, {symbol: prices[-1]})
             guard = self.risk.can_open_position(
-                self.risk.portfolio_metrics(state, positions, {symbol: prices[-1]}),
+                metrics,
                 positions,
                 final_notional,
                 state.get("last_trade_at"),
@@ -92,12 +120,15 @@ class BotEngine:
 
             if guard["allowed"]:
                 await self.execute_buy(user_id, symbol, final_notional, allocation)
+            else:
+                logger.info(f"Buy blocked for {symbol}: {guard.get('reason')}")
 
         elif allocation["action"] == "SELL" and position:
             await self.execute_sell(user_id, symbol, position)
 
     async def execute_buy(self, user_id, symbol, notional, context):
         order = await self.execution.buy(symbol, notional, signal_snapshot=context)
+        await self.portfolio.record_trade_attempt(user_id, symbol, "BUY", order, context)
         if not order.get("success"):
             logger.error(f"Buy failed for {symbol}: {order}")
             return
@@ -108,29 +139,41 @@ class BotEngine:
             order["filled_price"],
             order["base_units"],
             order["notional_usd"],
+            order.get("fee_usd", 0.0),
         )
 
+        now = datetime.now(timezone.utc).isoformat()
         await self.db.portfolio_state.update_one(
             {"user_id": user_id},
-            {"$set": {"last_trade_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"last_trade_at": now}},
             upsert=True,
         )
+        await self.portfolio.update_risk_snapshot(user_id, {symbol: order["filled_price"]})
 
     async def execute_sell(self, user_id, symbol, position):
         order = await self.execution.sell(symbol, position["base_units"])
+        await self.portfolio.record_trade_attempt(user_id, symbol, "SELL", order, {"position": position})
         if not order.get("success"):
             logger.error(f"Sell failed for {symbol}: {order}")
             return
 
-        await self.portfolio.record_sell_fill(
+        result = await self.portfolio.record_sell_fill(
             user_id,
             symbol,
             order["filled_price"],
             order["base_units"],
+            order.get("fee_usd", 0.0),
         )
 
+        await self.db.trades_v2.update_one(
+            {"client_order_id": order.get("client_order_id")},
+            {"$set": {"realized_pnl": result.get("realized_pnl", 0.0)}},
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
         await self.db.portfolio_state.update_one(
             {"user_id": user_id},
-            {"$set": {"last_trade_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"last_trade_at": now}},
             upsert=True,
         )
+        await self.portfolio.update_risk_snapshot(user_id, {symbol: order["filled_price"]})
