@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Any, Dict, List, Optional
 
 
 class PortfolioServiceV2:
@@ -15,14 +15,136 @@ class PortfolioServiceV2:
         if state:
             return state
 
+        now = self.utc_now()
         state = {
             "user_id": user_id,
             "cash_balance": float(starting_cash),
             "realized_pnl": 0.0,
-            "updated_at": self.utc_now(),
+            "equity_high": float(starting_cash),
+            "daily_start_equity": float(starting_cash),
+            "updated_at": now,
         }
         await self.db.portfolio_state.insert_one(state)
         return state
+
+    async def get_positions(self, user_id: str) -> List[Dict[str, Any]]:
+        return await self.db.positions_v2.find({"user_id": user_id}, {"_id": 0}).to_list(100)
+
+    async def mark_positions(self, user_id: str, price_map: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+        positions = await self.get_positions(user_id)
+        price_map = price_map or {}
+        marked = []
+
+        for position in positions:
+            quantity = float(position.get("base_units", 0.0))
+            avg_price = float(position.get("avg_price", 0.0))
+            current_price = float(price_map.get(position.get("symbol"), avg_price))
+            market_value = quantity * current_price
+            cost_basis = float(position.get("notional_usd", 0.0))
+            pnl = market_value - cost_basis
+            pnl_percent = (pnl / cost_basis * 100) if cost_basis > 0 else 0.0
+            marked.append({
+                "user_id": user_id,
+                "symbol": position.get("symbol"),
+                "quantity": round(quantity, 12),
+                "base_units": round(quantity, 12),
+                "avg_price": round(avg_price, 8),
+                "current_price": round(current_price, 8),
+                "notional_usd": round(cost_basis, 8),
+                "market_value": round(market_value, 8),
+                "pnl": round(pnl, 8),
+                "pnl_percent": round(pnl_percent, 8),
+                "fees_paid_usd": round(float(position.get("fees_paid_usd", 0.0)), 8),
+                "created_at": position.get("created_at"),
+                "updated_at": position.get("updated_at"),
+            })
+        return marked
+
+    async def record_trade_attempt(
+        self,
+        user_id: str,
+        symbol: str,
+        side: str,
+        order: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = self.utc_now()
+        trade = {
+            "user_id": user_id,
+            "symbol": symbol,
+            "side": side,
+            "order_type": "market",
+            "status": order.get("status", "unknown"),
+            "order_id": order.get("order_id"),
+            "client_order_id": order.get("client_order_id"),
+            "requested_notional_usd": order.get("requested_notional_usd"),
+            "requested_base_units": order.get("requested_base_units"),
+            "notional_usd": order.get("notional_usd"),
+            "base_units": order.get("base_units"),
+            "filled_price": order.get("filled_price"),
+            "fee_usd": round(float(order.get("fee_usd", 0.0) or 0.0), 8),
+            "simulation": bool(order.get("simulation", False)),
+            "signal_snapshot": order.get("signal_snapshot") or context or {},
+            "created_at": now,
+            "filled_at": now if order.get("status") == "filled" else None,
+        }
+        await self.db.trades_v2.insert_one(trade)
+
+    async def get_trades(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        return await self.db.trades_v2.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+
+    async def update_risk_snapshot(self, user_id: str, price_map: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        state = await self.ensure_account_state(user_id)
+        positions = await self.mark_positions(user_id, price_map)
+
+        cash_balance = float(state.get("cash_balance", 0.0))
+        positions_value = sum(float(position.get("market_value", 0.0)) for position in positions)
+        total_equity = cash_balance + positions_value
+        max_equity = max(float(state.get("equity_high", total_equity)), total_equity)
+        daily_start_equity = float(state.get("daily_start_equity", max_equity))
+        current_drawdown = (max_equity - total_equity) / max_equity if max_equity > 0 else 0.0
+        daily_pnl = total_equity - daily_start_equity
+        now = self.utc_now()
+
+        snapshot = {
+            "user_id": user_id,
+            "total_equity": round(total_equity, 8),
+            "max_equity": round(max_equity, 8),
+            "equity_floor": round(max_equity * 0.97, 8),
+            "current_drawdown": round(current_drawdown, 8),
+            "daily_pnl": round(daily_pnl, 8),
+            "positions_value": round(positions_value, 8),
+            "cash_balance": round(cash_balance, 8),
+            "timestamp": now,
+        }
+
+        await self.db.risk_metrics.insert_one(snapshot.copy())
+        await self.db.portfolio_state.update_one(
+            {"user_id": user_id},
+            {"$set": {"equity_high": max_equity, "updated_at": now}},
+            upsert=True,
+        )
+        return snapshot
+
+    async def get_dashboard_stats(self, user_id: str) -> Dict[str, Any]:
+        state = await self.ensure_account_state(user_id)
+        metrics = await self.db.risk_metrics.find_one({"user_id": user_id}, {"_id": 0}, sort=[("timestamp", -1)])
+        if not metrics:
+            metrics = await self.update_risk_snapshot(user_id)
+
+        positions = await self.get_positions(user_id)
+        trades_count = await self.db.trades_v2.count_documents({"user_id": user_id})
+        config = await self.db.bot_configs.find_one({"user_id": user_id}, {"_id": 0})
+        return {
+            "total_equity": metrics.get("total_equity", 10000.0),
+            "daily_pnl": metrics.get("daily_pnl", 0.0),
+            "total_positions": len(positions),
+            "total_trades": trades_count,
+            "bot_active": config.get("is_active", False) if config else False,
+            "current_drawdown": metrics.get("current_drawdown", 0.0),
+            "cash_balance": metrics.get("cash_balance", state.get("cash_balance", 10000.0)),
+            "positions_value": metrics.get("positions_value", 0.0),
+        }
 
     async def record_buy_fill(
         self,
@@ -31,16 +153,22 @@ class PortfolioServiceV2:
         filled_price: float,
         base_units: float,
         notional_usd: float,
+        fee_usd: float = 0.0,
     ) -> None:
         await self.ensure_account_state(user_id)
 
+        fee_usd = float(fee_usd or 0.0)
+        gross_notional = float(notional_usd)
+        cost_basis = gross_notional + fee_usd
+        units = float(base_units)
         existing = await self.db.positions_v2.find_one({"user_id": user_id, "symbol": symbol}, {"_id": 0})
 
         if existing:
             old_units = float(existing.get("base_units", 0.0))
             old_notional = float(existing.get("notional_usd", 0.0))
-            new_units = old_units + float(base_units)
-            new_notional = old_notional + float(notional_usd)
+            old_fees = float(existing.get("fees_paid_usd", 0.0))
+            new_units = old_units + units
+            new_notional = old_notional + cost_basis
             new_avg = new_notional / new_units if new_units > 0 else float(filled_price)
 
             await self.db.positions_v2.update_one(
@@ -49,6 +177,7 @@ class PortfolioServiceV2:
                     "base_units": round(new_units, 12),
                     "notional_usd": round(new_notional, 8),
                     "avg_price": round(new_avg, 8),
+                    "fees_paid_usd": round(old_fees + fee_usd, 8),
                     "updated_at": self.utc_now(),
                 }},
             )
@@ -56,16 +185,17 @@ class PortfolioServiceV2:
             await self.db.positions_v2.insert_one({
                 "user_id": user_id,
                 "symbol": symbol,
-                "base_units": round(float(base_units), 12),
-                "notional_usd": round(float(notional_usd), 8),
-                "avg_price": round(float(filled_price), 8),
+                "base_units": round(units, 12),
+                "notional_usd": round(cost_basis, 8),
+                "avg_price": round(cost_basis / units, 8) if units > 0 else round(float(filled_price), 8),
+                "fees_paid_usd": round(fee_usd, 8),
                 "created_at": self.utc_now(),
                 "updated_at": self.utc_now(),
             })
 
         await self.db.portfolio_state.update_one(
             {"user_id": user_id},
-            {"$inc": {"cash_balance": -float(notional_usd)}, "$set": {"updated_at": self.utc_now()}},
+            {"$inc": {"cash_balance": -cost_basis}, "$set": {"updated_at": self.utc_now()}},
             upsert=True,
         )
 
@@ -75,6 +205,7 @@ class PortfolioServiceV2:
         symbol: str,
         filled_price: float,
         base_units: float,
+        fee_usd: float = 0.0,
     ) -> Dict[str, Any]:
         position = await self.db.positions_v2.find_one({"user_id": user_id, "symbol": symbol})
         if not position:
@@ -85,11 +216,13 @@ class PortfolioServiceV2:
         if current_units <= 0:
             return {"realized_pnl": 0.0}
 
+        fee_usd = float(fee_usd or 0.0)
         sell_units = min(float(base_units), current_units)
         cost_basis_per_unit = current_notional / current_units
         sold_cost_basis = sell_units * cost_basis_per_unit
-        proceeds = sell_units * float(filled_price)
-        realized_pnl = proceeds - sold_cost_basis
+        gross_proceeds = sell_units * float(filled_price)
+        net_proceeds = gross_proceeds - fee_usd
+        realized_pnl = net_proceeds - sold_cost_basis
 
         remaining_units = current_units - sell_units
         remaining_notional = max(0.0, current_notional - sold_cost_basis)
@@ -109,12 +242,14 @@ class PortfolioServiceV2:
 
         await self.db.portfolio_state.update_one(
             {"user_id": user_id},
-            {"$inc": {"cash_balance": proceeds, "realized_pnl": realized_pnl}, "$set": {"updated_at": self.utc_now()}},
+            {"$inc": {"cash_balance": net_proceeds, "realized_pnl": realized_pnl}, "$set": {"updated_at": self.utc_now()}},
             upsert=True,
         )
 
         return {
             "realized_pnl": round(realized_pnl, 8),
-            "proceeds": round(proceeds, 8),
+            "gross_proceeds": round(gross_proceeds, 8),
+            "net_proceeds": round(net_proceeds, 8),
+            "fee_usd": round(fee_usd, 8),
             "remaining_units": round(max(remaining_units, 0.0), 12),
-            }
+        }
