@@ -1,61 +1,72 @@
 # Autonomous Trading Bot
 
-An AI-powered cryptocurrency trading bot with GPT-5 market analysis, intelligent risk management, and automated execution on Coinbase Advanced Trade.
+An AI-powered cryptocurrency trading bot prototype with market analysis, risk-management scaffolding, and a dashboard for simulated cryptocurrency trading.
+
+> **Current execution status:** the inspected V2 bot execution path is simulation-only. It generates synthetic fills and does not place live Coinbase orders. Do not assume that setting Coinbase credentials or disabling `SIMULATION_MODE` enables live trading.
 
 ## Features
 
-### 🤖 AI-Powered Analysis
-- **GPT-5 Integration**: Real-time market analysis using OpenAI's GPT-5 via Emergent LLM key
-- **Regime Detection**: Automatically identifies market conditions (Trend/Mean-Reversion/Volatility-Crush/Shock)
-- **Signal Generation**: AI-driven buy/sell recommendations with confidence scores
-- **Risk Assessment**: Comprehensive risk factor analysis for each trade decision
+### AI-Powered Analysis
+- Market/regime analysis scaffolding
+- Signal-generation pipeline with confidence scores
+- Risk-assessment scaffolding for trade decisions
 
-### 🛡️ Advanced Risk Management
-- **Capital Floor Protection**: Hard stop at 97% of all-time high equity (configurable)
-- **Daily Loss Limits**: Automatic trading halt at 1.5% daily loss threshold
-- **Position Sizing**: Kelly Criterion-based sizing with safety factors
-- **Drawdown Monitoring**: Real-time tracking of portfolio drawdown
+### Risk Management
+- Configurable capital floor and daily-loss settings in the API model
+- V2 risk guard for max position notional, total exposure, open-position count, daily-loss, drawdown, and cooldown checks
+- Simulation-first operating model
 
-### 📊 Smart Execution
-- **Cost-Aware Trading**: Considers slippage and execution costs
-- **Simulation Mode**: Test strategies without real funds
-- **Order Management**: Market orders with fill tracking
-- **Multi-Symbol Support**: Trade BTC-USD, ETH-USD, and more
+### Execution
+- **Simulation Mode:** test strategy/control flow without real funds
+- **V2 Execution:** currently returns simulated fills only
+- **Live Trading:** not production-ready and not wired through the inspected V2 execution path
 
-### 📈 Beautiful Dashboard
-- **Real-Time Metrics**: Live portfolio value, P&L, positions, and trades
-- **Risk Dashboard**: Visual display of equity floor, drawdown, and risk limits
-- **AI Analysis View**: See GPT-5 market insights and recommendations
-- **Trade History**: Complete audit trail of all executed trades
+### Dashboard
+- Portfolio, P&L, positions, trades, risk, and analysis views
 
 ## Tech Stack
 
 **Backend:**
 - FastAPI (Python)
-- MongoDB (database)
-- Coinbase Advanced Trade API
-- GPT-5 (via Emergent LLM key)
+- MongoDB
 - JWT authentication
+- Coinbase package dependency present, but V2 execution is currently simulated
 
 **Frontend:**
-- React 19
+- React
 - Tailwind CSS + shadcn/ui
-- Recharts for data visualization
-- Axios for API calls
+- Recharts
+- Axios
 
 ## Getting Started
 
 ### 1. Environment Setup
 
-The application runs in **simulation mode** by default. All environment variables are pre-configured in `/app/backend/.env`:
+The application runs in **simulation mode** by default.
 
-- ✅ **EMERGENT_LLM_KEY**: Already configured for GPT-5 analysis
-- ✅ **SIMULATION_MODE**: Set to `True` (uses simulated market data and trades)
-- ⚠️ **COINBASE_API_KEY/SECRET**: Empty (add real keys to enable live trading)
+Recommended local-development environment:
+
+```bash
+DEBUG=True
+JWT_SECRET=replace-with-a-long-random-local-secret
+SIMULATION_MODE=True
+CORS_ORIGINS=http://localhost:3000
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=trading_bot
+```
+
+Production-like deployments should set:
+
+```bash
+DEBUG=False
+JWT_SECRET=<long-random-secret-from-a-secret-manager>
+SIMULATION_MODE=True
+CORS_ORIGINS=https://your-frontend-domain.example
+```
+
+Do not use wildcard CORS origins in production.
 
 ### 2. Launch the Application
-
-The services are already running via supervisor:
 
 ```bash
 # Check service status
@@ -69,72 +80,64 @@ sudo supervisorctl restart backend frontend
 
 Open your browser to: **http://localhost:3000**
 
-1. **Sign Up**: Create an account with email/password
-2. **Dashboard**: View your portfolio (starts with $10,000 simulated capital)
-3. **Start Bot**: Toggle the bot switch to begin autonomous trading
-
-### 4. Monitor Trading
-
-- **Overview Tab**: Portfolio metrics, risk stats, recent trades
-- **Trades Tab**: Complete trade history with execution details
-- **Positions Tab**: Current open positions and P&L
-- **AI Analysis Tab**: GPT-5 market analysis and recommendations
+1. Sign up with email/password
+2. View the simulated portfolio
+3. Start the bot to begin simulation-mode autonomous trading
 
 ## Simulation Mode
 
-**Current Mode**: Simulation ✅
+**Current supported mode:** Simulation
 
-- Uses realistic simulated market data
-- Executes "paper trades" with slippage
-- No real funds at risk
-- Perfect for testing strategies
+- Uses generated market data for strategy flow
+- Executes paper trades with simulated slippage
+- No real funds are used
+- Suitable for UI, orchestration, and risk-control development
 
-**Switching to Live Trading** ⚠️
+## Live Trading Status
 
-1. Obtain Coinbase Advanced Trade API credentials:
-   - Go to https://coinbase.com/developer-platform
-   - Create API key with ECDSA (ES256) signature
-   - Enable "View" and "Trade" permissions
+Live trading is **not currently enabled through the inspected V2 execution path**.
 
-2. Update `/app/backend/.env`:
-   ```
-   COINBASE_API_KEY=organizations/{org_id}/apiKeys/{key_id}
-   COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----
-   YOUR_PRIVATE_KEY_HERE
-   -----END EC PRIVATE KEY-----
-   SIMULATION_MODE=False
-   ```
+The V2 execution path uses `TradingServiceV2`, which returns simulated fills. Before connecting real funds, the project needs a dedicated live-execution adapter, real historical market-data integration, stronger state/audit logging, and enforced risk kill-switch behavior.
 
-3. Restart backend:
-   ```bash
-   sudo supervisorctl restart backend
-   ```
+Required work before live trading:
 
-⚠️ **Warning**: Live trading involves real financial risk. Start with small amounts.
+1. Implement a Coinbase execution adapter behind an explicit `LIVE_TRADING_ENABLED=True` gate.
+2. Keep `SIMULATION_MODE=True` as the default.
+3. Fail closed when live market data is unavailable.
+4. Add a canonical append-only trade ledger.
+5. Enforce risk kill switches before every order.
+6. Add tests for auth, market data, execution, accounting, and risk halts.
+
+## Phase 1 Safety Remediation
+
+This branch includes first-pass safety hardening:
+
+1. Market data fails closed in non-simulation mode instead of silently returning simulated prices.
+2. Historical data refuses to return generated history when simulation mode is disabled.
+3. Runtime configuration guard module validates JWT and CORS posture.
+4. Documentation now accurately states that the current V2 bot is simulation-only.
 
 ## Safety Features
 
-The bot includes multiple safety mechanisms:
+The codebase includes safety scaffolding, but several controls still need full integration before production use:
 
-1. **Capital Floor**: Trading halts if equity drops below 97% of ATH
-2. **Daily Loss Limit**: Automatic stop at 1.5% daily loss
-3. **Position Limits**: Maximum 5% of capital per trade
-4. **Confidence Threshold**: Only trades signals with 60%+ confidence
-5. **Cost Validation**: Rejects trades with excessive slippage
-6. **Time-to-Live**: Exits stale positions after signal decay
+1. Capital floor configuration
+2. Daily-loss configuration
+3. Position and exposure checks in `RiskGuardV2`
+4. Cooldown checks in `RiskGuardV2`
+5. Simulation-mode execution path
 
 ## Trading Strategy
 
-The bot implements a multi-factor approach:
+The bot implements a multi-factor scaffold:
 
-1. **Market Regime Detection**: Classifies current market state
-2. **GPT-5 Analysis**: Deep analysis of market conditions
-3. **Signal Generation**: BUY/HOLD/SELL with confidence
-4. **Risk Validation**: Multi-layer risk checks
-5. **Position Sizing**: Kelly-based with safety factors
-6. **Execution**: Cost-aware market orders
-7. **Monitoring**: Continuous P&L and risk tracking
+1. Market regime classification
+2. Signal generation
+3. Allocation
+4. Risk checks
+5. Simulated execution
+6. Portfolio state updates
 
 ---
 
-**Built with Emergent** | AI-First Development Platform
+**Status:** simulation prototype. Not ready for live autonomous trading.

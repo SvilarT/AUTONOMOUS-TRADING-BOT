@@ -7,32 +7,48 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+
+class MarketDataUnavailable(RuntimeError):
+    pass
+
+
 class MarketDataService:
     def __init__(self):
-        self.simulation_mode = os.getenv('SIMULATION_MODE', 'True') == 'True'
+        self.simulation_mode = os.getenv('SIMULATION_MODE', 'True').strip().lower() in {'1', 'true', 'yes', 'on'}
         self.base_url = "https://api.exchange.coinbase.com"
     
     async def get_current_price(self, symbol: str) -> Dict[str, Any]:
-        """Get current market price for a symbol"""
+        """Get current market price for a symbol.
+
+        Simulation mode may return generated prices. Non-simulation mode fails closed
+        instead of silently substituting fake market data.
+        """
         if self.simulation_mode:
             return self._simulate_price_data(symbol)
         
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{self.base_url}/products/{symbol}/ticker") as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return {
-                            "symbol": symbol,
-                            "price": float(data.get('price', 0)),
-                            "volume": float(data.get('volume', 0)),
-                            "timestamp": datetime.now(timezone.utc).isoformat()
-                        }
-                    else:
-                        return self._simulate_price_data(symbol)
+                    if response.status != 200:
+                        raise MarketDataUnavailable(f"Coinbase ticker returned HTTP {response.status} for {symbol}")
+
+                    data = await response.json()
+                    price = data.get('price')
+                    if price is None:
+                        raise MarketDataUnavailable(f"Coinbase ticker response missing price for {symbol}")
+
+                    return {
+                        "symbol": symbol,
+                        "price": float(price),
+                        "volume": float(data.get('volume', 0)),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "simulation": False,
+                    }
+        except MarketDataUnavailable:
+            raise
         except Exception as e:
             logger.error(f"Error fetching market data: {e}")
-            return self._simulate_price_data(symbol)
+            raise MarketDataUnavailable(f"Market data unavailable for {symbol}") from e
     
     def _simulate_price_data(self, symbol: str) -> Dict[str, Any]:
         """Simulate realistic price data"""
@@ -53,8 +69,18 @@ class MarketDataService:
         }
     
     async def get_historical_data(self, symbol: str, periods: int = 100) -> List[Dict[str, Any]]:
-        """Get historical price data for analysis"""
-        # Simulate historical data
+        """Get historical price data for analysis.
+
+        Historical data is currently implemented only for simulation mode. In
+        non-simulation mode this fails closed to prevent trading decisions from
+        being made from generated history.
+        """
+        if not self.simulation_mode:
+            raise MarketDataUnavailable(
+                "Historical market data is not implemented for non-simulation mode. "
+                "Refusing to return simulated history while SIMULATION_MODE is disabled."
+            )
+
         base_price = 45000.0 if "BTC" in symbol else 2500.0
         data = []
         
@@ -63,7 +89,8 @@ class MarketDataService:
             data.append({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "price": round(price, 2),
-                "volume": random.uniform(100, 1000)
+                "volume": random.uniform(100, 1000),
+                "simulation": True,
             })
         
         return data
