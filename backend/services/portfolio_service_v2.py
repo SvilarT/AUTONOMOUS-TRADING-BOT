@@ -77,6 +77,7 @@ class PortfolioServiceV2:
             "status": order.get("status", "unknown"),
             "order_id": order.get("order_id"),
             "client_order_id": order.get("client_order_id"),
+            "idempotency_key": order.get("idempotency_key"),
             "requested_notional_usd": order.get("requested_notional_usd"),
             "requested_base_units": order.get("requested_base_units"),
             "notional_usd": order.get("notional_usd"),
@@ -146,17 +147,8 @@ class PortfolioServiceV2:
             "positions_value": metrics.get("positions_value", 0.0),
         }
 
-    async def record_buy_fill(
-        self,
-        user_id: str,
-        symbol: str,
-        filled_price: float,
-        base_units: float,
-        notional_usd: float,
-        fee_usd: float = 0.0,
-    ) -> None:
+    async def record_buy_fill(self, user_id: str, symbol: str, filled_price: float, base_units: float, notional_usd: float, fee_usd: float = 0.0) -> None:
         await self.ensure_account_state(user_id)
-
         fee_usd = float(fee_usd or 0.0)
         gross_notional = float(notional_usd)
         cost_basis = gross_notional + fee_usd
@@ -170,47 +162,16 @@ class PortfolioServiceV2:
             new_units = old_units + units
             new_notional = old_notional + cost_basis
             new_avg = new_notional / new_units if new_units > 0 else float(filled_price)
-
-            await self.db.positions_v2.update_one(
-                {"user_id": user_id, "symbol": symbol},
-                {"$set": {
-                    "base_units": round(new_units, 12),
-                    "notional_usd": round(new_notional, 8),
-                    "avg_price": round(new_avg, 8),
-                    "fees_paid_usd": round(old_fees + fee_usd, 8),
-                    "updated_at": self.utc_now(),
-                }},
-            )
+            await self.db.positions_v2.update_one({"user_id": user_id, "symbol": symbol}, {"$set": {"base_units": round(new_units, 12), "notional_usd": round(new_notional, 8), "avg_price": round(new_avg, 8), "fees_paid_usd": round(old_fees + fee_usd, 8), "updated_at": self.utc_now()}})
         else:
-            await self.db.positions_v2.insert_one({
-                "user_id": user_id,
-                "symbol": symbol,
-                "base_units": round(units, 12),
-                "notional_usd": round(cost_basis, 8),
-                "avg_price": round(cost_basis / units, 8) if units > 0 else round(float(filled_price), 8),
-                "fees_paid_usd": round(fee_usd, 8),
-                "created_at": self.utc_now(),
-                "updated_at": self.utc_now(),
-            })
+            await self.db.positions_v2.insert_one({"user_id": user_id, "symbol": symbol, "base_units": round(units, 12), "notional_usd": round(cost_basis, 8), "avg_price": round(cost_basis / units, 8) if units > 0 else round(float(filled_price), 8), "fees_paid_usd": round(fee_usd, 8), "created_at": self.utc_now(), "updated_at": self.utc_now()})
 
-        await self.db.portfolio_state.update_one(
-            {"user_id": user_id},
-            {"$inc": {"cash_balance": -cost_basis}, "$set": {"updated_at": self.utc_now()}},
-            upsert=True,
-        )
+        await self.db.portfolio_state.update_one({"user_id": user_id}, {"$inc": {"cash_balance": -cost_basis}, "$set": {"updated_at": self.utc_now()}}, upsert=True)
 
-    async def record_sell_fill(
-        self,
-        user_id: str,
-        symbol: str,
-        filled_price: float,
-        base_units: float,
-        fee_usd: float = 0.0,
-    ) -> Dict[str, Any]:
+    async def record_sell_fill(self, user_id: str, symbol: str, filled_price: float, base_units: float, fee_usd: float = 0.0) -> Dict[str, Any]:
         position = await self.db.positions_v2.find_one({"user_id": user_id, "symbol": symbol})
         if not position:
             return {"realized_pnl": 0.0}
-
         current_units = float(position.get("base_units", 0.0))
         current_notional = float(position.get("notional_usd", 0.0))
         if current_units <= 0:
@@ -223,33 +184,13 @@ class PortfolioServiceV2:
         gross_proceeds = sell_units * float(filled_price)
         net_proceeds = gross_proceeds - fee_usd
         realized_pnl = net_proceeds - sold_cost_basis
-
         remaining_units = current_units - sell_units
         remaining_notional = max(0.0, current_notional - sold_cost_basis)
 
         if remaining_units <= 1e-12:
             await self.db.positions_v2.delete_one({"user_id": user_id, "symbol": symbol})
         else:
-            await self.db.positions_v2.update_one(
-                {"user_id": user_id, "symbol": symbol},
-                {"$set": {
-                    "base_units": round(remaining_units, 12),
-                    "notional_usd": round(remaining_notional, 8),
-                    "avg_price": round(remaining_notional / remaining_units, 8),
-                    "updated_at": self.utc_now(),
-                }},
-            )
+            await self.db.positions_v2.update_one({"user_id": user_id, "symbol": symbol}, {"$set": {"base_units": round(remaining_units, 12), "notional_usd": round(remaining_notional, 8), "avg_price": round(remaining_notional / remaining_units, 8), "updated_at": self.utc_now()}})
 
-        await self.db.portfolio_state.update_one(
-            {"user_id": user_id},
-            {"$inc": {"cash_balance": net_proceeds, "realized_pnl": realized_pnl}, "$set": {"updated_at": self.utc_now()}},
-            upsert=True,
-        )
-
-        return {
-            "realized_pnl": round(realized_pnl, 8),
-            "gross_proceeds": round(gross_proceeds, 8),
-            "net_proceeds": round(net_proceeds, 8),
-            "fee_usd": round(fee_usd, 8),
-            "remaining_units": round(max(remaining_units, 0.0), 12),
-        }
+        await self.db.portfolio_state.update_one({"user_id": user_id}, {"$inc": {"cash_balance": net_proceeds, "realized_pnl": realized_pnl}, "$set": {"updated_at": self.utc_now()}}, upsert=True)
+        return {"realized_pnl": round(realized_pnl, 8), "gross_proceeds": round(gross_proceeds, 8), "net_proceeds": round(net_proceeds, 8), "fee_usd": round(fee_usd, 8), "remaining_units": round(max(remaining_units, 0.0), 12)}

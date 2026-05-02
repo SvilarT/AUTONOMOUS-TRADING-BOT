@@ -1,1 +1,1 @@
-from api_routes_v2 import api_router
+from api_routes_v3 import api_router
