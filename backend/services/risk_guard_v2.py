@@ -10,6 +10,7 @@ class RiskGuardV2:
         max_open_positions: int = 3,
         max_daily_loss_pct: float = 0.03,
         max_drawdown_pct: float = 0.05,
+        capital_floor_pct: float = 0.97,
         cooldown_seconds: int = 300,
     ):
         self.max_position_notional = max_position_notional
@@ -17,7 +18,21 @@ class RiskGuardV2:
         self.max_open_positions = max_open_positions
         self.max_daily_loss_pct = max_daily_loss_pct
         self.max_drawdown_pct = max_drawdown_pct
+        self.capital_floor_pct = capital_floor_pct
         self.cooldown_seconds = cooldown_seconds
+
+    @classmethod
+    def from_config(cls, config: Dict[str, Any] | None):
+        config = config or {}
+        return cls(
+            max_position_notional=float(config.get("max_position_notional", config.get("max_trade_notional", 100.0))),
+            max_total_exposure_pct=float(config.get("max_total_exposure_pct", 0.30)),
+            max_open_positions=int(config.get("max_open_positions", 3)),
+            max_daily_loss_pct=float(config.get("max_daily_loss", config.get("max_daily_loss_pct", 0.03))),
+            max_drawdown_pct=float(config.get("max_drawdown_pct", 0.05)),
+            capital_floor_pct=float(config.get("capital_floor", config.get("capital_floor_pct", 0.97))),
+            cooldown_seconds=int(config.get("cooldown_seconds", 300)),
+        )
 
     @staticmethod
     def utc_now() -> datetime:
@@ -35,6 +50,7 @@ class RiskGuardV2:
 
         total_equity = cash + market_value
         equity_high = max(equity_high, total_equity)
+        capital_floor_value = equity_high * self.capital_floor_pct
 
         daily_loss_pct = max(0.0, (daily_start_equity - total_equity) / daily_start_equity) if daily_start_equity > 0 else 0.0
         drawdown_pct = max(0.0, (equity_high - total_equity) / equity_high) if equity_high > 0 else 0.0
@@ -46,12 +62,15 @@ class RiskGuardV2:
             "total_equity": round(total_equity, 8),
             "equity_high": round(equity_high, 8),
             "daily_start_equity": round(daily_start_equity, 8),
+            "capital_floor_value": round(capital_floor_value, 8),
             "daily_loss_pct": round(daily_loss_pct, 8),
             "drawdown_pct": round(drawdown_pct, 8),
             "exposure_pct": round(exposure_pct, 8),
         }
 
     def should_kill_switch(self, metrics: Dict[str, float]) -> Dict[str, Any]:
+        if metrics["total_equity"] <= metrics.get("capital_floor_value", 0.0):
+            return {"triggered": True, "reason": "capital floor breached"}
         if metrics["daily_loss_pct"] >= self.max_daily_loss_pct:
             return {"triggered": True, "reason": f"daily loss limit breached ({metrics['daily_loss_pct']:.2%})"}
         if metrics["drawdown_pct"] >= self.max_drawdown_pct:
@@ -65,6 +84,11 @@ class RiskGuardV2:
         proposed_notional: float,
         last_trade_at_iso: str | None = None,
     ) -> Dict[str, Any]:
+        kill = self.should_kill_switch(metrics)
+        if kill["triggered"]:
+            return {"allowed": False, "reason": kill["reason"]}
+        if proposed_notional <= 0:
+            return {"allowed": False, "reason": "invalid proposed notional"}
         if proposed_notional > self.max_position_notional:
             return {"allowed": False, "reason": "position notional exceeds limit"}
         if len(positions) >= self.max_open_positions:
