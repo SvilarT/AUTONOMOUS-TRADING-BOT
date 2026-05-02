@@ -1,11 +1,6 @@
 # This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# They are provided by a third-party and are governed by separate terms.
 
-# This workflow requires that you have an existing account with codescan.io
-# For more information about configuring your workflow,
-# read our documentation at https://github.com/codescan-io/codescan-scanner-action
 name: CodeScan
 
 on:
@@ -26,23 +21,44 @@ jobs:
           security-events: write
           actions: read
         runs-on: ubuntu-latest
+        env:
+          CODESCAN_LOGIN: ${{ secrets.CODESCAN_AUTH_TOKEN }}
+          CODESCAN_ORG: ${{ secrets.CODESCAN_ORGANIZATION_KEY }}
+          CODESCAN_PROJECT: ${{ secrets.CODESCAN_PROJECT_KEY }}
         steps:
             -   name: Checkout repository
                 uses: actions/checkout@v4
 
+            -   name: Check CodeScan configuration
+                id: codescan_config
+                shell: bash
+                run: |
+                    if [[ -n "$CODESCAN_LOGIN" && -n "$CODESCAN_ORG" && -n "$CODESCAN_PROJECT" ]]; then
+                      echo "configured=true" >> "$GITHUB_OUTPUT"
+                      echo "CodeScan configuration found."
+                    else
+                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                      echo "CodeScan configuration is incomplete; skipping scanner."
+                    fi
+
             -   name: Set up Java 17
+                if: steps.codescan_config.outputs.configured == 'true'
                 uses: actions/setup-java@v4
                 with:
                     distribution: temurin
                     java-version: '17'
 
             -   name: Verify Java runtime
+                if: steps.codescan_config.outputs.configured == 'true'
+                shell: bash
                 run: |
                     echo "JAVA_HOME=$JAVA_HOME"
                     java -version
+                    echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
                     echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
 
             -   name: Cache files
+                if: steps.codescan_config.outputs.configured == 'true'
                 uses: actions/cache@v3
                 with:
                     path: |
@@ -51,22 +67,22 @@ jobs:
                     restore-keys: ${{ runner.os }}-sonar
 
             -   name: Run Analysis
-                if: ${{ secrets.CODESCAN_AUTH_TOKEN != '' && secrets.CODESCAN_ORGANIZATION_KEY != '' && secrets.CODESCAN_PROJECT_KEY != '' }}
+                if: steps.codescan_config.outputs.configured == 'true'
                 uses: codescan-io/codescan-scanner-action@5b2e8c5683ef6a5adc8fa3b7950bb07debccce12
                 env:
                     JAVA_HOME: ${{ env.JAVA_HOME }}
                     PATH: ${{ env.JAVA_HOME }}/bin:${{ env.PATH }}
                 with:
-                    login: ${{ secrets.CODESCAN_AUTH_TOKEN }}
-                    organization: ${{ secrets.CODESCAN_ORGANIZATION_KEY }}
-                    projectKey: ${{ secrets.CODESCAN_PROJECT_KEY }}
+                    login: ${{ env.CODESCAN_LOGIN }}
+                    organization: ${{ env.CODESCAN_ORG }}
+                    projectKey: ${{ env.CODESCAN_PROJECT }}
 
             -   name: Skip notice
-                if: ${{ secrets.CODESCAN_AUTH_TOKEN == '' || secrets.CODESCAN_ORGANIZATION_KEY == '' || secrets.CODESCAN_PROJECT_KEY == '' }}
-                run: echo "Skipping CodeScan because one or more required CODESCAN_* secrets are not configured."
+                if: steps.codescan_config.outputs.configured != 'true'
+                run: echo "CodeScan skipped because repository scan configuration is not complete."
 
             -   name: Upload SARIF file
-                if: ${{ hashFiles('codescan.sarif') != '' }}
+                if: steps.codescan_config.outputs.configured == 'true' && hashFiles('codescan.sarif') != ''
                 uses: github/codeql-action/upload-sarif@v3
                 with:
                     sarif_file: codescan.sarif
