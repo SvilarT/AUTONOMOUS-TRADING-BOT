@@ -2,12 +2,14 @@ from datetime import datetime, timezone
 import asyncio
 import logging
 
+from services.alert_service import AlertService
 from services.execution_control_v2 import ExecutionControlV2
 from services.execution_service_v2 import ExecutionServiceV2
 from services.portfolio_service_v2 import PortfolioServiceV2
 from services.market_data_service import MarketDataService
 from services.risk_guard_v2 import RiskGuardV2
 from services.signal_planner_v2 import SignalPlannerV2
+from services.structured_logging import log_event
 from services.trading_mode_v2 import TradingModeError, TradingModeService
 
 logger = logging.getLogger(__name__)
@@ -16,6 +18,7 @@ logger = logging.getLogger(__name__)
 class BotEngine:
     def __init__(self, db):
         self.db = db
+        self.alerts = AlertService(db)
         self.execution = ExecutionServiceV2()
         self.execution_control = ExecutionControlV2(db)
         self.portfolio = PortfolioServiceV2(db)
@@ -26,14 +29,15 @@ class BotEngine:
 
     async def start(self, user_id: str):
         self.running = True
-        logger.info(f"Bot started: {user_id}")
+        log_event(logger, logging.INFO, "bot_started", user_id=user_id)
 
         while self.running:
             try:
                 await self.cycle(user_id)
                 await asyncio.sleep(8)
             except Exception as e:
-                logger.error(f"Cycle error: {e}")
+                log_event(logger, logging.ERROR, "bot_cycle_failed", user_id=user_id, error=str(e))
+                await self.alerts.emit(user_id, "bot_cycle_failed", "error", "Bot cycle failed", {"error": str(e)})
                 await asyncio.sleep(3)
 
     async def stop(self):
@@ -47,7 +51,7 @@ class BotEngine:
         risk = RiskGuardV2.from_config(config)
         await self.portfolio.ensure_account_state(user_id)
         symbols = config.get("symbols", ["BTC-USD"])
-        price_map = await self.get_price_map(symbols)
+        price_map = await self.get_price_map(user_id, symbols)
         snapshot = await self.portfolio.update_risk_snapshot(user_id, price_map)
         state = await self.db.portfolio_state.find_one({"user_id": user_id}) or {}
         positions = await self.portfolio.get_positions(user_id)
@@ -56,12 +60,15 @@ class BotEngine:
         metrics["drawdown_pct"] = max(metrics.get("drawdown_pct", 0.0), float(snapshot.get("current_drawdown", 0.0)))
         kill = risk.should_kill_switch(metrics)
 
+        if metrics.get("drawdown_pct", 0.0) >= (risk.max_drawdown_pct * 0.8):
+            await self.alerts.emit(user_id, "abnormal_drawdown", "warning", "Drawdown is approaching halt threshold", metrics)
+
         if kill.get("triggered"):
-            await self.halt_bot(user_id, kill.get("reason"))
+            await self.halt_bot(user_id, kill.get("reason"), metrics)
             return
 
         if self.mode.is_readonly:
-            logger.info("Bot is in live-readonly mode; analysis allowed, execution disabled")
+            log_event(logger, logging.INFO, "execution_disabled_readonly", user_id=user_id)
             return
 
         for symbol in symbols:
@@ -69,21 +76,23 @@ class BotEngine:
             state = await self.db.portfolio_state.find_one({"user_id": user_id}) or {}
             await self.process_symbol(user_id, symbol, positions, state, risk, price_map)
 
-    async def halt_bot(self, user_id: str, reason: str):
+    async def halt_bot(self, user_id: str, reason: str, metrics=None):
         await self.db.bot_configs.update_one(
             {"user_id": user_id},
             {"$set": {"is_active": False, "halt_reason": reason, "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
-        logger.warning(f"Bot halted for {user_id}: {reason}")
+        log_event(logger, logging.WARNING, "bot_halted", user_id=user_id, reason=reason)
+        await self.alerts.emit(user_id, "bot_halted", "critical", f"Bot halted: {reason}", metrics or {})
 
-    async def get_price_map(self, symbols):
+    async def get_price_map(self, user_id, symbols):
         price_map = {}
         for symbol in symbols:
             try:
                 current = await self.market.get_current_price(symbol)
                 price_map[symbol] = float(current.get("price", 0.0))
             except Exception as exc:
-                logger.warning(f"Unable to mark {symbol}: {exc}")
+                log_event(logger, logging.WARNING, "market_data_failed", user_id=user_id, symbol=symbol, error=str(exc))
+                await self.alerts.emit(user_id, "market_data_failed", "warning", f"Market data unavailable for {symbol}", {"symbol": symbol, "error": str(exc)})
         return price_map
 
     async def process_symbol(self, user_id, symbol, positions, state, risk: RiskGuardV2, price_map):
@@ -98,7 +107,7 @@ class BotEngine:
             if guard["allowed"]:
                 await self.execute_buy(user_id, symbol, plan.get("notional", 0.0), plan)
             else:
-                logger.info(f"Buy blocked for {symbol}: {guard.get('reason')}")
+                log_event(logger, logging.INFO, "buy_blocked", user_id=user_id, symbol=symbol, reason=guard.get("reason"))
 
         elif plan["action"] == "SELL" and position:
             await self.execute_sell(user_id, symbol, position, plan)
@@ -107,17 +116,18 @@ class BotEngine:
         try:
             self.mode.assert_can_trade()
         except TradingModeError as exc:
-            logger.warning(str(exc))
+            log_event(logger, logging.WARNING, "execution_mode_blocked", user_id=user_id, symbol=symbol, side="BUY", error=str(exc))
+            await self.alerts.emit(user_id, "execution_mode_blocked", "warning", str(exc), {"symbol": symbol, "side": "BUY"})
             return
 
         idempotency_key = self.execution_control.build_idempotency_key(user_id, symbol, "BUY", context)
         if await self.execution_control.already_executed(idempotency_key):
-            logger.info(f"Skipping duplicate BUY for {symbol}: {idempotency_key}")
+            log_event(logger, logging.INFO, "duplicate_order_skipped", user_id=user_id, symbol=symbol, side="BUY")
             return
 
         lock = await self.execution_control.acquire_lock(user_id, symbol, "BUY")
         if not lock.get("acquired"):
-            logger.info(f"Buy lock blocked for {symbol}: {lock.get('reason')}")
+            log_event(logger, logging.INFO, "execution_lock_blocked", user_id=user_id, symbol=symbol, side="BUY", reason=lock.get("reason"))
             return
 
         try:
@@ -125,23 +135,12 @@ class BotEngine:
             order["idempotency_key"] = idempotency_key
             await self.portfolio.record_trade_attempt(user_id, symbol, "BUY", order, context)
             if not order.get("success"):
-                logger.error(f"Buy failed for {symbol}: {order}")
+                log_event(logger, logging.ERROR, "execution_failed", user_id=user_id, symbol=symbol, side="BUY", order=order)
+                await self.alerts.emit(user_id, "execution_failed", "error", f"Buy failed for {symbol}", order)
                 return
 
-            await self.portfolio.record_buy_fill(
-                user_id,
-                symbol,
-                order["filled_price"],
-                order["base_units"],
-                order["notional_usd"],
-                order.get("fee_usd", 0.0),
-            )
-
-            await self.db.portfolio_state.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_trade_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True,
-            )
+            await self.portfolio.record_buy_fill(user_id, symbol, order["filled_price"], order["base_units"], order["notional_usd"], order.get("fee_usd", 0.0))
+            await self.db.portfolio_state.update_one({"user_id": user_id}, {"$set": {"last_trade_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
             await self.portfolio.update_risk_snapshot(user_id, {symbol: float(order["filled_price"])})
         finally:
             await self.execution_control.release_lock(lock["key"])
@@ -150,18 +149,19 @@ class BotEngine:
         try:
             self.mode.assert_can_trade()
         except TradingModeError as exc:
-            logger.warning(str(exc))
+            log_event(logger, logging.WARNING, "execution_mode_blocked", user_id=user_id, symbol=symbol, side="SELL", error=str(exc))
+            await self.alerts.emit(user_id, "execution_mode_blocked", "warning", str(exc), {"symbol": symbol, "side": "SELL"})
             return
 
         context = context or {"position": position}
         idempotency_key = self.execution_control.build_idempotency_key(user_id, symbol, "SELL", context)
         if await self.execution_control.already_executed(idempotency_key):
-            logger.info(f"Skipping duplicate SELL for {symbol}: {idempotency_key}")
+            log_event(logger, logging.INFO, "duplicate_order_skipped", user_id=user_id, symbol=symbol, side="SELL")
             return
 
         lock = await self.execution_control.acquire_lock(user_id, symbol, "SELL")
         if not lock.get("acquired"):
-            logger.info(f"Sell lock blocked for {symbol}: {lock.get('reason')}")
+            log_event(logger, logging.INFO, "execution_lock_blocked", user_id=user_id, symbol=symbol, side="SELL", reason=lock.get("reason"))
             return
 
         try:
@@ -169,27 +169,13 @@ class BotEngine:
             order["idempotency_key"] = idempotency_key
             await self.portfolio.record_trade_attempt(user_id, symbol, "SELL", order, context)
             if not order.get("success"):
-                logger.error(f"Sell failed for {symbol}: {order}")
+                log_event(logger, logging.ERROR, "execution_failed", user_id=user_id, symbol=symbol, side="SELL", order=order)
+                await self.alerts.emit(user_id, "execution_failed", "error", f"Sell failed for {symbol}", order)
                 return
 
-            result = await self.portfolio.record_sell_fill(
-                user_id,
-                symbol,
-                order["filled_price"],
-                order["base_units"],
-                order.get("fee_usd", 0.0),
-            )
-
-            await self.db.trades_v2.update_one(
-                {"client_order_id": order.get("client_order_id")},
-                {"$set": {"realized_pnl": result.get("realized_pnl", 0.0), "idempotency_key": idempotency_key}},
-            )
-
-            await self.db.portfolio_state.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_trade_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True,
-            )
+            result = await self.portfolio.record_sell_fill(user_id, symbol, order["filled_price"], order["base_units"], order.get("fee_usd", 0.0))
+            await self.db.trades_v2.update_one({"client_order_id": order.get("client_order_id")}, {"$set": {"realized_pnl": result.get("realized_pnl", 0.0), "idempotency_key": idempotency_key}})
+            await self.db.portfolio_state.update_one({"user_id": user_id}, {"$set": {"last_trade_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
             await self.portfolio.update_risk_snapshot(user_id, {symbol: float(order["filled_price"])})
         finally:
             await self.execution_control.release_lock(lock["key"])

@@ -10,11 +10,12 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 
 from services.bot_manager import BotManager
+from services.structured_logging import configure_logging, log_event
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -30,14 +31,14 @@ bot_manager = None
 @asynccontextmanager
 async def lifespan(app):
     global bot_manager
-    logger.info("Starting Autonomous Trading Bot application...")
+    log_event(logger, logging.INFO, "app_starting", service="autonomous_trading_bot")
     bot_manager = BotManager(db)
     manager_task = asyncio.create_task(bot_manager.start_manager())
-    logger.info("Bot Manager started")
+    log_event(logger, logging.INFO, "bot_manager_started")
 
     yield
 
-    logger.info("Shutting down application...")
+    log_event(logger, logging.INFO, "app_shutting_down")
     await bot_manager.stop_manager()
     manager_task.cancel()
     try:
@@ -45,4 +46,4 @@ async def lifespan(app):
     except asyncio.CancelledError:
         pass
     client.close()
-    logger.info("Application shutdown complete")
+    log_event(logger, logging.INFO, "app_shutdown_complete")
