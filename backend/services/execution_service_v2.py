@@ -14,7 +14,10 @@ class ExecutionServiceV2:
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
-    def build_client_order_id(prefix: str, symbol: str) -> str:
+    def build_client_order_id(prefix: str, symbol: str, idempotency_key: str | None = None) -> str:
+        if idempotency_key:
+            stable = uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key).hex[:16]
+            return f"{prefix.lower()}_{symbol.replace('-', '').lower()}_{stable}"
         return f"{prefix.lower()}_{symbol.replace('-', '').lower()}_{uuid.uuid4().hex[:16]}"
 
     async def buy(
@@ -22,14 +25,16 @@ class ExecutionServiceV2:
         symbol: str,
         notional_usd: float,
         signal_snapshot: Optional[Dict[str, Any]] = None,
+        idempotency_key: str | None = None,
     ) -> Dict[str, Any]:
-        client_order_id = self.build_client_order_id("buy", symbol)
+        client_order_id = self.build_client_order_id("buy", symbol, idempotency_key)
         result = await self.trading_service.place_market_buy(
             symbol=symbol,
             notional_usd=notional_usd,
             client_order_id=client_order_id,
         )
         result["client_order_id"] = client_order_id
+        result["idempotency_key"] = idempotency_key
         result["requested_notional_usd"] = round(float(notional_usd), 8)
         result["signal_snapshot"] = signal_snapshot or {}
         result["timestamp"] = self.utc_now()
@@ -40,14 +45,16 @@ class ExecutionServiceV2:
         symbol: str,
         base_units: float,
         reason: str = "",
+        idempotency_key: str | None = None,
     ) -> Dict[str, Any]:
-        client_order_id = self.build_client_order_id("sell", symbol)
+        client_order_id = self.build_client_order_id("sell", symbol, idempotency_key)
         result = await self.trading_service.place_market_sell(
             symbol=symbol,
             base_units=base_units,
             client_order_id=client_order_id,
         )
         result["client_order_id"] = client_order_id
+        result["idempotency_key"] = idempotency_key
         result["requested_base_units"] = round(float(base_units), 12)
         result["reason"] = reason
         result["timestamp"] = self.utc_now()
