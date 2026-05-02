@@ -1,57 +1,48 @@
-name: Backend CI (Python)
+name: Backend CI
 
 on:
   push:
     branches: [main]
     paths:
       - 'backend/**'
-      - 'main.py'
-      - 'pyproject.toml'
-      - 'uv.lock'
+      - '.github/workflows/backend-ci.yml'
   pull_request:
     branches: [main]
     paths:
       - 'backend/**'
-      - 'main.py'
-      - 'pyproject.toml'
-      - 'uv.lock'
+      - '.github/workflows/backend-ci.yml'
 
 jobs:
-  build-and-test:
+  backend-tests:
     runs-on: ubuntu-latest
-
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DEBUG: "True"
+      JWT_SECRET: "ci-test-secret"
+      SIMULATION_MODE: "True"
+      TRADING_MODE: "paper"
+      CORS_ORIGINS: "http://localhost:3000"
+      MONGO_URL: "mongodb://localhost:27017"
+      DB_NAME: "trading_bot_ci"
+      PYTHONPATH: "."
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'  # Match your version; change if needed
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
 
-    - name: Install uv (if using uv for deps)
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
-    - name: Install dependencies
-      working-directory: backend
-      run: |
-        uv sync --frozen   # or uv pip install -r requirements.txt if not using uv/pyproject
-        # If no uv: pip install -r requirements.txt
+      - name: Compile backend
+        run: python -m compileall .
 
-    - name: Lint with flake8 (optional)
-      working-directory: backend
-      run: |
-        uv pip install flake8
-        flake8 . || true   # continue even if lint warnings
-
-    - name: Run tests (if you have them)
-      working-directory: backend
-      run: |
-        # pytest tests/   # uncomment if you add pytest
-        echo "No tests configured yet - add pytest later"
-
-    - name: Smoke check server.py (basic run)
-      working-directory: backend
-      run: python -m py_compile server.py   # or your entrypoint file
+      - name: Run backend tests
+        run: pytest -q
