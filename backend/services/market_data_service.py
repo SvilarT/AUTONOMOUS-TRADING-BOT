@@ -1,8 +1,10 @@
-import os
+import hashlib
 import logging
+import os
 import random
-from typing import Dict, Any, List
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -13,84 +15,259 @@ class MarketDataUnavailable(RuntimeError):
 
 
 class MarketDataService:
-    def __init__(self):
-        self.simulation_mode = os.getenv('SIMULATION_MODE', 'True').strip().lower() in {'1', 'true', 'yes', 'on'}
-        self.base_url = "https://api.exchange.coinbase.com"
-    
-    async def get_current_price(self, symbol: str) -> Dict[str, Any]:
-        """Get current market price for a symbol.
+    """Market-data gateway for simulation and Coinbase Exchange OHLCV data.
 
-        Simulation mode may return generated prices. Non-simulation mode fails closed
-        instead of silently substituting fake market data.
-        """
+    Phase 1 goals implemented here:
+    - deterministic seeded simulation data
+    - real Coinbase candle retrieval for non-simulation mode
+    - MongoDB candle persistence when a db handle is supplied
+    - timeframe/granularity support
+    - stale-data and data-quality metadata
+    """
+
+    TIMEFRAME_SECONDS = {
+        "1m": 60,
+        "5m": 300,
+        "15m": 900,
+        "1h": 3600,
+        "6h": 21600,
+        "1d": 86400,
+    }
+    MAX_COINBASE_CANDLES = 300
+
+    def __init__(self, db=None, simulation_mode: Optional[bool] = None, seed: Optional[int | str] = None):
+        self.db = db
+        self.simulation_mode = (
+            simulation_mode
+            if simulation_mode is not None
+            else os.getenv("SIMULATION_MODE", "True").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        self.base_url = os.getenv("COINBASE_EXCHANGE_URL", "https://api.exchange.coinbase.com")
+        self.seed = seed if seed is not None else os.getenv("SIMULATION_SEED", "autonomous-trading-bot")
+
+    @classmethod
+    def granularity_for(cls, timeframe: str) -> int:
+        try:
+            return cls.TIMEFRAME_SECONDS[timeframe]
+        except KeyError as exc:
+            allowed = ", ".join(sorted(cls.TIMEFRAME_SECONDS))
+            raise ValueError(f"Unsupported timeframe={timeframe!r}. Allowed values: {allowed}") from exc
+
+    @staticmethod
+    def utc_now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def parse_timestamp(value: str | datetime) -> datetime:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+    @staticmethod
+    def candle_checksum(candle: Dict[str, Any]) -> str:
+        parts = [
+            candle.get("symbol"),
+            candle.get("timeframe"),
+            candle.get("open_time"),
+            candle.get("open"),
+            candle.get("high"),
+            candle.get("low"),
+            candle.get("close"),
+            candle.get("volume"),
+        ]
+        return hashlib.sha256("|".join(map(str, parts)).encode("utf-8")).hexdigest()
+
+    def _rng_for(self, symbol: str, timeframe: str, periods: int) -> random.Random:
+        seed_material = f"{self.seed}:{symbol}:{timeframe}:{periods}"
+        seed_int = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest()[:16], 16)
+        return random.Random(seed_int)
+
+    async def get_current_price(self, symbol: str) -> Dict[str, Any]:
         if self.simulation_mode:
             return self._simulate_price_data(symbol)
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{self.base_url}/products/{symbol}/ticker") as response:
                     if response.status != 200:
                         raise MarketDataUnavailable(f"Coinbase ticker returned HTTP {response.status} for {symbol}")
-
                     data = await response.json()
-                    price = data.get('price')
+                    price = data.get("price")
                     if price is None:
                         raise MarketDataUnavailable(f"Coinbase ticker response missing price for {symbol}")
-
                     return {
                         "symbol": symbol,
                         "price": float(price),
-                        "volume": float(data.get('volume', 0)),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "volume": float(data.get("volume", 0)),
+                        "timestamp": self.utc_now().isoformat(),
                         "simulation": False,
+                        "source": "coinbase_exchange",
+                        "quality": "live_ticker",
                     }
         except MarketDataUnavailable:
             raise
-        except Exception as e:
-            logger.error(f"Error fetching market data: {e}")
-            raise MarketDataUnavailable(f"Market data unavailable for {symbol}") from e
-    
+        except Exception as exc:
+            logger.error("Error fetching market data: %s", exc)
+            raise MarketDataUnavailable(f"Market data unavailable for {symbol}") from exc
+
     def _simulate_price_data(self, symbol: str) -> Dict[str, Any]:
-        """Simulate realistic price data"""
-        base_prices = {
-            "BTC-USD": 45000.0 + random.uniform(-1000, 1000),
-            "ETH-USD": 2500.0 + random.uniform(-100, 100)
-        }
-        
-        price = base_prices.get(symbol, 1000.0)
-        
+        rng = self._rng_for(symbol, "ticker", 1)
+        base_prices = {"BTC-USD": 45000.0, "ETH-USD": 2500.0}
+        base = base_prices.get(symbol, 1000.0)
+        price = base * (1 + rng.uniform(-0.025, 0.025))
         return {
             "symbol": symbol,
             "price": round(price, 2),
-            "volume": random.uniform(100, 1000),
-            "change_24h": round(random.uniform(-5, 5), 2),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "simulation": True
+            "volume": round(rng.uniform(100, 1000), 8),
+            "change_24h": round(rng.uniform(-5, 5), 2),
+            "timestamp": self.utc_now().isoformat(),
+            "simulation": True,
+            "source": "seeded_simulation",
+            "quality": "synthetic_seeded",
         }
-    
-    async def get_historical_data(self, symbol: str, periods: int = 100) -> List[Dict[str, Any]]:
-        """Get historical price data for analysis.
 
-        Historical data is currently implemented only for simulation mode. In
-        non-simulation mode this fails closed to prevent trading decisions from
-        being made from generated history.
-        """
-        if not self.simulation_mode:
-            raise MarketDataUnavailable(
-                "Historical market data is not implemented for non-simulation mode. "
-                "Refusing to return simulated history while SIMULATION_MODE is disabled."
+    async def get_historical_data(self, symbol: str, periods: int = 100, timeframe: str = "1m") -> List[Dict[str, Any]]:
+        candles = await self.get_candles(symbol, timeframe=timeframe, periods=periods)
+        return [
+            {
+                "timestamp": candle["close_time"],
+                "price": candle["close"],
+                "volume": candle["volume"],
+                "simulation": candle["simulation"],
+                "source": candle["source"],
+                "timeframe": candle["timeframe"],
+                "quality": candle["quality"],
+            }
+            for candle in candles
+        ]
+
+    async def get_candles(self, symbol: str, timeframe: str = "1m", periods: int = 100) -> List[Dict[str, Any]]:
+        if periods <= 0:
+            return []
+        self.granularity_for(timeframe)
+        if self.simulation_mode:
+            candles = self._simulate_candles(symbol, timeframe, periods)
+        else:
+            candles = await self._fetch_coinbase_candles(symbol, timeframe, periods)
+        await self.persist_candles(candles)
+        return candles
+
+    def _simulate_candles(self, symbol: str, timeframe: str, periods: int) -> List[Dict[str, Any]]:
+        granularity = self.granularity_for(timeframe)
+        rng = self._rng_for(symbol, timeframe, periods)
+        base_price = 45000.0 if "BTC" in symbol else 2500.0 if "ETH" in symbol else 1000.0
+        now = self.utc_now().replace(second=0, microsecond=0)
+        start = now - timedelta(seconds=granularity * periods)
+        price = base_price
+        candles: List[Dict[str, Any]] = []
+        for idx in range(periods):
+            open_time = start + timedelta(seconds=granularity * idx)
+            close_time = open_time + timedelta(seconds=granularity)
+            drift = rng.uniform(-0.008, 0.008)
+            open_price = price
+            close_price = max(0.01, open_price * (1 + drift))
+            high = max(open_price, close_price) * (1 + rng.uniform(0, 0.004))
+            low = min(open_price, close_price) * (1 - rng.uniform(0, 0.004))
+            volume = rng.uniform(100, 1000)
+            candle = {
+                "symbol": symbol,
+                "exchange": "simulation",
+                "timeframe": timeframe,
+                "granularity_seconds": granularity,
+                "open_time": open_time.isoformat(),
+                "close_time": close_time.isoformat(),
+                "open": round(open_price, 8),
+                "high": round(high, 8),
+                "low": round(low, 8),
+                "close": round(close_price, 8),
+                "price": round(close_price, 8),
+                "volume": round(volume, 8),
+                "source": "seeded_simulation",
+                "simulation": True,
+                "quality": "synthetic_seeded",
+                "is_stale": False,
+                "ingested_at": self.utc_now().isoformat(),
+            }
+            candle["checksum"] = self.candle_checksum(candle)
+            candles.append(candle)
+            price = close_price
+        return candles
+
+    async def _fetch_coinbase_candles(self, symbol: str, timeframe: str, periods: int) -> List[Dict[str, Any]]:
+        granularity = self.granularity_for(timeframe)
+        limit = min(periods, self.MAX_COINBASE_CANDLES)
+        end = self.utc_now()
+        start = end - timedelta(seconds=granularity * limit)
+        params = {"granularity": granularity, "start": start.isoformat(), "end": end.isoformat()}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}/products/{symbol}/candles", params=params) as response:
+                    if response.status != 200:
+                        raise MarketDataUnavailable(f"Coinbase candles returned HTTP {response.status} for {symbol}")
+                    raw = await response.json()
+        except MarketDataUnavailable:
+            raise
+        except Exception as exc:
+            logger.error("Error fetching Coinbase candles: %s", exc)
+            raise MarketDataUnavailable(f"Historical market data unavailable for {symbol}") from exc
+
+        if not isinstance(raw, list) or not raw:
+            raise MarketDataUnavailable(f"Coinbase returned no candles for {symbol}")
+
+        candles = []
+        now = self.utc_now()
+        for row in sorted(raw, key=lambda item: item[0]):
+            # Coinbase Exchange candle format: [time, low, high, open, close, volume]
+            open_time = datetime.fromtimestamp(int(row[0]), tz=timezone.utc)
+            close_time = open_time + timedelta(seconds=granularity)
+            is_stale = (now - close_time).total_seconds() > granularity * 3
+            candle = {
+                "symbol": symbol,
+                "exchange": "coinbase_exchange",
+                "timeframe": timeframe,
+                "granularity_seconds": granularity,
+                "open_time": open_time.isoformat(),
+                "close_time": close_time.isoformat(),
+                "open": float(row[3]),
+                "high": float(row[2]),
+                "low": float(row[1]),
+                "close": float(row[4]),
+                "price": float(row[4]),
+                "volume": float(row[5]),
+                "source": "coinbase_exchange",
+                "simulation": False,
+                "quality": "stale" if is_stale else "exchange_ohlcv",
+                "is_stale": is_stale,
+                "ingested_at": now.isoformat(),
+            }
+            candle["checksum"] = self.candle_checksum(candle)
+            candles.append(candle)
+        return candles[-periods:]
+
+    async def persist_candles(self, candles: List[Dict[str, Any]]) -> None:
+        if not self.db or not candles:
+            return
+        collection = self.db.market_candles
+        for candle in candles:
+            await collection.update_one(
+                {
+                    "symbol": candle["symbol"],
+                    "exchange": candle["exchange"],
+                    "timeframe": candle["timeframe"],
+                    "open_time": candle["open_time"],
+                },
+                {"$set": candle},
+                upsert=True,
             )
 
-        base_price = 45000.0 if "BTC" in symbol else 2500.0
-        data = []
-        
-        for i in range(periods):
-            price = base_price * (1 + random.uniform(-0.02, 0.02))
-            data.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "price": round(price, 2),
-                "volume": random.uniform(100, 1000),
-                "simulation": True,
-            })
-        
-        return data
+    async def get_stored_candles(self, symbol: str, timeframe: str = "1m", limit: int = 100) -> List[Dict[str, Any]]:
+        if not self.db:
+            raise MarketDataUnavailable("No database handle configured for stored candle retrieval")
+        self.granularity_for(timeframe)
+        cursor = (
+            self.db.market_candles.find({"symbol": symbol, "timeframe": timeframe}, {"_id": 0})
+            .sort("open_time", -1)
+            .limit(limit)
+        )
+        candles = await cursor.to_list(limit)
+        return list(reversed(candles))
