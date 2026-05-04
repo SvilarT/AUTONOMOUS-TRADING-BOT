@@ -1,5 +1,7 @@
 from typing import List
 
+from pydantic import ValidationError
+
 from services.settings_v2 import SETTINGS, RuntimeRole, SettingsV2
 
 
@@ -14,19 +16,37 @@ def parse_csv_env(name: str, default: str) -> List[str]:
 
 
 def parse_runtime_role(raw_role: str | None) -> RuntimeRole:
-    return RuntimeRole(str(raw_role or "all").strip().lower())
+    try:
+        return RuntimeRole(str(raw_role or "all").strip().lower())
+    except ValueError as exc:
+        allowed = ", ".join(role.value for role in RuntimeRole)
+        raise RuntimeError(f"Invalid RUNTIME_ROLE={raw_role!r}. Allowed values: {allowed}") from exc
+
+
+def _raise_runtime_error(exc: ValidationError) -> None:
+    message = "; ".join(error.get("msg", "invalid setting") for error in exc.errors())
+    raise RuntimeError(message) from exc
 
 
 def validate_origin(origin: str) -> None:
-    SettingsV2(debug=True, jwt_secret="debug", cors_origins=[origin])
+    try:
+        SettingsV2(debug=True, jwt_secret="debug", cors_origins=[origin])
+    except ValidationError as exc:
+        _raise_runtime_error(exc)
 
 
 def validate_cors_origins(origins: List[str], debug: bool) -> None:
-    SettingsV2(debug=debug, jwt_secret="debug" if debug else "x" * 32, cors_origins=origins)
+    try:
+        SettingsV2(debug=debug, jwt_secret="debug" if debug else "x" * 32, cors_origins=origins)
+    except ValidationError as exc:
+        _raise_runtime_error(exc)
 
 
 def validate_jwt_secret(secret: str, debug: bool) -> None:
-    SettingsV2(debug=debug, jwt_secret=secret, cors_origins=["http://localhost:3000"])
+    try:
+        SettingsV2(debug=debug, jwt_secret=secret, cors_origins=["http://localhost:3000"])
+    except ValidationError as exc:
+        _raise_runtime_error(exc)
 
 
 DEBUG = SETTINGS.debug
