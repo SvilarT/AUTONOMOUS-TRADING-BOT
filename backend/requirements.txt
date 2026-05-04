@@ -1,4 +1,5 @@
 aiohttp==3.13.2
+email-validator==2.2.0
 fastapi==0.110.1
 httpx==0.28.1
 motor==3.3.1
