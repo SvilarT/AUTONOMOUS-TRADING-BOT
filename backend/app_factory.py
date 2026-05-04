@@ -5,6 +5,7 @@ from api_routes import api_router
 from app_state import db, lifespan
 from runtime_config import CORS_ORIGINS
 from services.operational_readiness_v2 import OperationalReadinessServiceV2
+from services.security_headers_v2 import SecurityHeadersMiddlewareV2
 
 
 def create_app() -> FastAPI:
@@ -23,6 +24,7 @@ def create_app() -> FastAPI:
         return await OperationalReadinessServiceV2().readiness(db, strict=strict)
 
     app.include_router(api_router)
+    app.add_middleware(SecurityHeadersMiddlewareV2)
     app.add_middleware(
         CORSMiddleware,
         allow_credentials=True,
