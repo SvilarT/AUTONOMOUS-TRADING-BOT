@@ -1,8 +1,8 @@
 # Autonomous Trading Bot
 
-An AI-powered cryptocurrency trading bot prototype with market analysis, risk-management scaffolding, and a dashboard for simulated cryptocurrency trading.
+An AI-powered cryptocurrency trading bot prototype with market analysis, risk-management scaffolding, paper execution, gated live-execution preview endpoints, and a dashboard for simulated cryptocurrency trading.
 
-> **Current execution status:** the inspected V2 bot execution path is simulation-only. It generates synthetic fills and does not place live Coinbase orders. Do not assume that setting Coinbase credentials or disabling `SIMULATION_MODE` enables live trading.
+> **Current execution status:** autonomous bot execution remains paper/simulation-only through `BotEngine -> ExecutionServiceV2 -> TradingServiceV2`. Separately, the API contains manually invoked, gated live Coinbase order endpoints through `LiveTradingServiceV2`. Those endpoints are fail-closed by default and are not production-ready for autonomous live trading.
 
 ## Features
 
@@ -15,11 +15,12 @@ An AI-powered cryptocurrency trading bot prototype with market analysis, risk-ma
 - Configurable capital floor and daily-loss settings in the API model
 - V2 risk guard for max position notional, total exposure, open-position count, daily-loss, drawdown, and cooldown checks
 - Simulation-first operating model
+- Gated live-order preflight checks for manually invoked live endpoints
 
 ### Execution
-- **Simulation Mode:** test strategy/control flow without real funds
-- **V2 Execution:** currently returns simulated fills only
-- **Live Trading:** not production-ready and not wired through the inspected V2 execution path
+- **Paper/Simulation Bot Execution:** autonomous bot cycles execute through the paper adapter only
+- **Gated Live Execution Endpoints:** manual `/live-trading/*` endpoints can reach Coinbase only when all live gates pass
+- **Live Autonomous Trading:** not production-ready and intentionally blocked from the autonomous bot path
 
 ### Dashboard
 - Portfolio, P&L, positions, trades, risk, and analysis views
@@ -30,7 +31,8 @@ An AI-powered cryptocurrency trading bot prototype with market analysis, risk-ma
 - FastAPI (Python)
 - MongoDB
 - JWT authentication
-- Coinbase package dependency present, but V2 execution is currently simulated
+- Paper execution adapter for autonomous bot cycles
+- Coinbase live execution adapter behind explicit gated manual endpoints
 
 **Frontend:**
 - React
@@ -42,7 +44,7 @@ An AI-powered cryptocurrency trading bot prototype with market analysis, risk-ma
 
 ### 1. Environment Setup
 
-The application runs in **simulation mode** by default.
+The application runs in paper/simulation mode by default.
 
 Recommended local-development environment:
 
@@ -50,6 +52,7 @@ Recommended local-development environment:
 DEBUG=True
 JWT_SECRET=replace-with-a-long-random-local-secret
 SIMULATION_MODE=True
+TRADING_MODE=paper
 CORS_ORIGINS=http://localhost:3000
 MONGO_URL=mongodb://localhost:27017
 DB_NAME=trading_bot
@@ -61,6 +64,7 @@ Production-like deployments should set:
 DEBUG=False
 JWT_SECRET=<long-random-secret-from-a-secret-manager>
 SIMULATION_MODE=True
+TRADING_MODE=paper
 CORS_ORIGINS=https://your-frontend-domain.example
 ```
 
@@ -82,50 +86,63 @@ Open your browser to: **http://localhost:3000**
 
 1. Sign up with email/password
 2. View the simulated portfolio
-3. Start the bot to begin simulation-mode autonomous trading
+3. Start the bot to begin paper-mode autonomous trading
 
-## Simulation Mode
+## Paper / Simulation Mode
 
-**Current supported mode:** Simulation
+**Default supported autonomous mode:** Paper/simulation
 
-- Uses generated market data for strategy flow
-- Executes paper trades with simulated slippage
-- No real funds are used
-- Suitable for UI, orchestration, and risk-control development
+- Uses strategy/control-flow scaffolding
+- Executes paper trades with modeled fills, costs, slippage, minimums, rejections, and partial fills
+- No real funds are used by the autonomous bot path
+- Suitable for UI, orchestration, strategy, accounting, and risk-control development
 
 ## Live Trading Status
 
-Live trading is **not currently enabled through the inspected V2 execution path**.
+Live trading exists only through explicit, manually invoked, gated endpoints:
 
-The V2 execution path uses `TradingServiceV2`, which returns simulated fills. Before connecting real funds, the project needs a dedicated live-execution adapter, real historical market-data integration, stronger state/audit logging, and enforced risk kill-switch behavior.
+- `POST /live-trading/market-buy`
+- `POST /live-trading/market-sell`
+- `GET /live-trading/gate`
+- `GET /live-trading/audits`
 
-Required work before live trading:
+The autonomous bot path does **not** use live execution. `TradingModeService.assert_can_trade()` rejects `TRADING_MODE=live-trading` for normal bot execution and requires live orders to use `LiveTradingServiceV2`.
 
-1. Implement a Coinbase execution adapter behind an explicit `LIVE_TRADING_ENABLED=True` gate.
-2. Keep `SIMULATION_MODE=True` as the default.
-3. Fail closed when live market data is unavailable.
-4. Add a canonical append-only trade ledger.
-5. Enforce risk kill switches before every order.
-6. Add tests for auth, market data, execution, accounting, and risk halts.
+Live execution is fail-closed unless all of the following are true:
 
-## Phase 1 Safety Remediation
+1. `TRADING_MODE=live-trading`
+2. `LIVE_TRADING_ENABLED=True`
+3. `LIVE_EXECUTION_ADAPTER=coinbase_exchange_v2`
+4. `COINBASE_LIVE_ORDER_KILL_SWITCH` is not enabled
+5. The user's bot config has `live_trading_enabled=True`
+6. The symbol is listed in `LIVE_ALLOWED_SYMBOLS`
+7. The order notional is below `LIVE_MAX_ORDER_NOTIONAL_USD`
+8. Manual approval is satisfied when required
 
-This branch includes first-pass safety hardening:
+Before any real-money deployment, the project still needs stronger production controls: hardened auth, MFA/approval challenge, complete ledger reconciliation, observability, incident runbooks, broker sandbox testing, and operational sign-off.
 
-1. Market data fails closed in non-simulation mode instead of silently returning simulated prices.
-2. Historical data refuses to return generated history when simulation mode is disabled.
-3. Runtime configuration guard module validates JWT and CORS posture.
-4. Documentation now accurately states that the current V2 bot is simulation-only.
+## P0 Safety Hardening
+
+This branch includes P0 safety hardening:
+
+1. Documentation accurately distinguishes autonomous paper execution from manually gated live endpoints.
+2. Coinbase live adapter has an adapter-level kill switch.
+3. Live trading gate tests cover fail-closed, dry-run, approval, symbol, and notional behavior.
+4. Auth input validation rejects invalid emails and weak passwords.
+5. Autonomous bot execution is regression-tested to remain blocked from live trading mode.
+6. Live order audits are written through a hash-chained audit service.
 
 ## Safety Features
 
-The codebase includes safety scaffolding, but several controls still need full integration before production use:
+The codebase includes safety scaffolding, but several controls still need full production integration before live autonomous use:
 
 1. Capital floor configuration
 2. Daily-loss configuration
 3. Position and exposure checks in `RiskGuardV2`
 4. Cooldown checks in `RiskGuardV2`
-5. Simulation-mode execution path
+5. Paper execution path for autonomous bot cycles
+6. Fail-closed live execution gate for manual live endpoints
+7. Hash-chained live order audit records
 
 ## Trading Strategy
 
@@ -135,9 +152,9 @@ The bot implements a multi-factor scaffold:
 2. Signal generation
 3. Allocation
 4. Risk checks
-5. Simulated execution
+5. Paper execution
 6. Portfolio state updates
 
 ---
 
-**Status:** simulation prototype. Not ready for live autonomous trading.
+**Status:** paper/simulation prototype with manually gated live-execution plumbing. Not ready for live autonomous trading.
