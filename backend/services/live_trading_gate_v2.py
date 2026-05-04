@@ -1,3 +1,4 @@
+import hmac
 import os
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
@@ -31,6 +32,12 @@ class LiveTradingGateV2:
         if value is None:
             return default
         return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def approval_tokens_match(provided: Optional[str], expected: Optional[str]) -> bool:
+        if not provided or not expected:
+            return False
+        return hmac.compare_digest(str(provided), str(expected))
 
     @classmethod
     def from_env(cls) -> LiveTradingGateConfig:
@@ -89,7 +96,7 @@ class LiveTradingGateV2:
 
         if self.config.manual_approval_required and not dry_run:
             check("approval_token_configured", bool(self.config.approval_token), "LIVE_APPROVAL_TOKEN must be configured when manual approval is required")
-            check("approval_token", approval_token == self.config.approval_token, "valid live approval token required")
+            check("approval_token", self.approval_tokens_match(approval_token, self.config.approval_token), "valid live approval token required")
 
         return {
             "allowed": True,

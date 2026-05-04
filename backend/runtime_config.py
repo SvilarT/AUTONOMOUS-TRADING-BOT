@@ -1,6 +1,7 @@
 import logging
 import os
 from typing import List
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,43 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def parse_csv_env(name: str, default: str) -> List[str]:
+    return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
+
+
+def validate_origin(origin: str) -> None:
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"Invalid CORS origin {origin!r}; expected absolute http(s) origin")
+
+
+def validate_cors_origins(origins: List[str], debug: bool) -> None:
+    if not origins:
+        raise RuntimeError("CORS_ORIGINS must include at least one explicit origin.")
+    if "*" in origins and not debug:
+        raise RuntimeError("Wildcard CORS is only allowed when DEBUG=True.")
+    for origin in origins:
+        if origin == "*" and debug:
+            continue
+        validate_origin(origin)
+        if not debug and origin.startswith("http://") and "localhost" not in origin and "127.0.0.1" not in origin:
+            raise RuntimeError("Production CORS origins must use https unless localhost-only.")
+
+
+def validate_jwt_secret(secret: str, debug: bool) -> None:
+    if debug:
+        return
+    if len(secret) < 32:
+        raise RuntimeError("JWT_SECRET must be at least 32 characters when DEBUG=False.")
+    weak_values = {"secret", "password", "changeme", "replace-me", "local-debug-placeholder"}
+    if secret.strip().lower() in weak_values:
+        raise RuntimeError("JWT_SECRET is too weak for production use.")
+
+
 DEBUG = env_bool("DEBUG", False)
 SIMULATION_MODE = env_bool("SIMULATION_MODE", True)
+OPS_ADMIN_ENABLED = env_bool("OPS_ADMIN_ENABLED", False)
+OPS_ADMIN_EMAILS = {email.lower() for email in parse_csv_env("OPS_ADMIN_EMAILS", "")}
 
 JWT_SECRET = os.environ.get("JWT_SECRET")
 if not JWT_SECRET:
@@ -22,13 +58,7 @@ if not JWT_SECRET:
         logger.warning("Using local DEBUG JWT placeholder. Set JWT_SECRET before deployment.")
     else:
         raise RuntimeError("JWT_SECRET must be configured unless DEBUG=True.")
+validate_jwt_secret(JWT_SECRET, DEBUG)
 
-CORS_ORIGINS: List[str] = [
-    origin.strip()
-    for origin in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
-    if origin.strip()
-]
-if not CORS_ORIGINS:
-    raise RuntimeError("CORS_ORIGINS must include at least one explicit origin.")
-if "*" in CORS_ORIGINS and not DEBUG:
-    raise RuntimeError("Wildcard CORS is only allowed when DEBUG=True.")
+CORS_ORIGINS: List[str] = parse_csv_env("CORS_ORIGINS", "http://localhost:3000")
+validate_cors_origins(CORS_ORIGINS, DEBUG)
