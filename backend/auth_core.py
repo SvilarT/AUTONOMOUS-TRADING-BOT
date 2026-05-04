@@ -6,7 +6,7 @@ import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from jwt import ExpiredSignatureError, InvalidTokenError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app_state import db, logger, pwd_context, security
 from runtime_config import JWT_SECRET
@@ -15,19 +15,19 @@ from runtime_config import JWT_SECRET
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    email: str
+    email: EmailStr
     password_hash: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class UserCreate(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=12, max_length=256)
 
 
 class UserLogin(BaseModel):
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=256)
 
 
 class TokenResponse(BaseModel):
@@ -65,13 +65,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 
 async def signup(user_data: UserCreate):
-    email = user_data.email.lower().strip()
+    email = str(user_data.email).lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(email=email, password_hash=pwd_context.hash(user_data.password))
     user_dict = user.model_dump()
+    user_dict["email"] = str(user_dict["email"]).lower().strip()
     user_dict["created_at"] = user_dict["created_at"].isoformat()
     await db.users.insert_one(user_dict)
 
@@ -91,7 +92,7 @@ async def signup(user_data: UserCreate):
 
 
 async def login(credentials: UserLogin):
-    email = credentials.email.lower().strip()
+    email = str(credentials.email).lower().strip()
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not pwd_context.verify(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")

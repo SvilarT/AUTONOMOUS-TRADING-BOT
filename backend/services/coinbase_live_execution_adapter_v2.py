@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any, Dict, Optional
 
 from services.coinbase_readonly_adapter_v2 import CoinbaseReadonlyAdapterV2, CoinbaseReadonlyError
@@ -14,11 +15,33 @@ class CoinbaseLiveExecutionAdapterV2(CoinbaseReadonlyAdapterV2):
     This class contains the actual POST /orders plumbing, but it should only be
     reached through LiveTradingServiceV2 + LiveTradingGateV2. It supports dry-run
     previews and market buy/sell payload generation.
+
+    P0 safety rule: the adapter has its own fail-closed kill switch in addition
+    to the service-level gate. This prevents future callers from bypassing the
+    gate and placing a real order accidentally.
     """
 
     adapter_name = "coinbase_exchange_v2"
+    kill_switch_env = "COINBASE_LIVE_ORDER_KILL_SWITCH"
+
+    @staticmethod
+    def env_bool(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def live_order_kill_switch_enabled(cls) -> bool:
+        return cls.env_bool(cls.kill_switch_env, False)
+
+    @classmethod
+    def assert_live_orders_not_killed(cls) -> None:
+        if cls.live_order_kill_switch_enabled():
+            raise CoinbaseLiveExecutionError(f"Live Coinbase order submission blocked by {cls.kill_switch_env}")
 
     async def _post_private(self, request_path: str, payload: Dict[str, Any]) -> Any:
+        self.assert_live_orders_not_killed()
         self.assert_credentials()
         body = json.dumps(payload, separators=(",", ":"))
         async with self.session_factory() as session:

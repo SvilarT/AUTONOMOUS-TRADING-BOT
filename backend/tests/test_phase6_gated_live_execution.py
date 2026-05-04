@@ -1,11 +1,13 @@
-import os
-
 import pytest
 
-from services.coinbase_live_execution_adapter_v2 import CoinbaseLiveExecutionAdapterV2
+from auth_core import UserCreate, UserLogin
+from services.coinbase_live_execution_adapter_v2 import CoinbaseLiveExecutionAdapterV2, CoinbaseLiveExecutionError
+from services.execution_service_v2 import ExecutionServiceV2
+from services.live_order_audit_service_v2 import LiveOrderAuditServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateConfig, LiveTradingGateV2
 from services.live_trading_service_v2 import LiveTradingServiceV2
 from services.trading_mode_v2 import TradingModeService, TradingModeError
+from services.trading_service_v2 import TradingServiceV2
 
 
 class FakeCursor:
@@ -31,6 +33,9 @@ class FakeCollection:
 
     async def find_one(self, query, projection=None, sort=None):
         matches = [doc for doc in self.docs if all(doc.get(k) == v for k, v in query.items())]
+        if sort:
+            for key, direction in reversed(sort):
+                matches = sorted(matches, key=lambda doc: doc.get(key, ""), reverse=direction == -1)
         return dict(matches[0]) if matches else None
 
     async def insert_one(self, doc):
@@ -193,6 +198,12 @@ def test_coinbase_live_adapter_payloads_and_dry_run_preview():
     assert sell_payload == {"type": "market", "side": "sell", "product_id": "ETH-USD", "size": "0.123456789123", "client_oid": "client-2"}
 
 
+def test_coinbase_live_adapter_kill_switch_blocks_non_dry_run(monkeypatch):
+    monkeypatch.setenv("COINBASE_LIVE_ORDER_KILL_SWITCH", "true")
+    with pytest.raises(CoinbaseLiveExecutionError):
+        CoinbaseLiveExecutionAdapterV2.assert_live_orders_not_killed()
+
+
 @pytest.mark.asyncio
 async def test_live_trading_service_blocks_before_adapter_when_gate_fails(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "live-trading")
@@ -206,6 +217,8 @@ async def test_live_trading_service_blocks_before_adapter_when_gate_fails(monkey
     assert result["status"] == "blocked"
     assert len(db.live_order_audits.docs) == 1
     assert db.live_order_audits.docs[0]["status"] == "blocked"
+    assert db.live_order_audits.docs[0]["previous_hash"] == "GENESIS"
+    assert db.live_order_audits.docs[0]["audit_hash"]
 
 
 @pytest.mark.asyncio
@@ -224,6 +237,22 @@ async def test_live_trading_service_allows_dry_run_preview_and_records_audit(mon
     assert len(db.live_order_audits.docs) == 2
     assert db.live_order_audits.docs[0]["status"] == "preflight_passed"
     assert db.live_order_audits.docs[1]["status"] == "dry_run"
+    assert db.live_order_audits.docs[1]["previous_hash"] == db.live_order_audits.docs[0]["audit_hash"]
+
+
+@pytest.mark.asyncio
+async def test_live_order_audit_chain_detects_tampering():
+    db = FakeDB()
+    audits = LiveOrderAuditServiceV2(db)
+    await audits.append({"user_id": "user-1", "status": "preflight_passed", "symbol": "BTC-USD"})
+    await audits.append({"user_id": "user-1", "status": "dry_run", "symbol": "BTC-USD"})
+
+    ok = await audits.verify_user_chain("user-1")
+    db.live_order_audits.docs[0]["status"] = "tampered"
+    tampered = await audits.verify_user_chain("user-1")
+
+    assert ok["status"] == "ok"
+    assert tampered["status"] == "tamper_detected"
 
 
 @pytest.mark.asyncio
@@ -255,3 +284,17 @@ def test_trading_mode_live_trading_still_forces_gated_service(monkeypatch):
     assert description["live_execution_enabled"] is False
     with pytest.raises(TradingModeError):
         mode.assert_can_trade()
+
+
+def test_autonomous_execution_service_is_paper_only():
+    execution = ExecutionServiceV2()
+    assert isinstance(execution.trading_service, TradingServiceV2)
+    assert execution.trading_service.__class__.__name__ == "TradingServiceV2"
+
+
+def test_auth_models_reject_invalid_email_and_short_signup_password():
+    with pytest.raises(ValueError):
+        UserCreate(email="not-an-email", password="long-enough-password")
+    with pytest.raises(ValueError):
+        UserCreate(email="user@example.com", password="short")
+    assert UserLogin(email="user@example.com", password="x")

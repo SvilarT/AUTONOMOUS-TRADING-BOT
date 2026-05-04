@@ -24,6 +24,8 @@ class MongoIndexServiceV2:
         await create(self.db.reconciliation_reports, [("user_id", 1), ("checked_at", -1)], name="reconciliation_user_checked")
         await create(self.db.live_readonly_reports, [("user_id", 1), ("snapshot.timestamp", -1)], name="live_readonly_user_timestamp")
         await create(self.db.live_order_audits, [("user_id", 1), ("created_at", -1)], name="live_audits_user_created")
+        await create(self.db.live_order_audits, [("audit_hash", 1)], unique=True, sparse=True, name="uniq_live_audit_hash")
+        await create(self.db.live_order_audits, [("user_id", 1), ("previous_hash", 1)], name="live_audits_user_previous_hash")
         await create(self.db.execution_locks, [("key", 1)], unique=True, name="uniq_execution_lock")
         await create(self.db.execution_locks, [("expires_at", 1)], name="execution_lock_expiry")
         await create(self.db.alerts, [("user_id", 1), ("created_at", -1)], name="alerts_user_created")
