@@ -15,7 +15,7 @@ api_router = APIRouter(prefix="/api")
 
 class BotConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    user_id: str
+    user_id: str = ""
     is_active: bool = False
     capital_floor: float = 0.97
     max_daily_loss: float = 0.015
