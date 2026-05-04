@@ -165,7 +165,7 @@ class PortfolioServiceV2:
         await self.ensure_account_state(user_id)
         fee_usd = float(fee_usd or 0.0)
         gross_notional = float(notional_usd)
-        cost_basis = gross_notional + fee_usd
+        cost_basis = gross_notional
         units = float(base_units)
         existing = await self.db.positions_v2.find_one({"user_id": user_id, "symbol": symbol}, {"_id": 0})
 
