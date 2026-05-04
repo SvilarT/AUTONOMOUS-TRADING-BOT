@@ -14,15 +14,18 @@ on:
 
 jobs:
   backend-tests:
+    name: Backend tests and operational guardrails
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     env:
-      DEBUG: "True"
+      DEBUG: "true"
       JWT_SECRET: "ci-test-secret"
-      SIMULATION_MODE: "True"
+      SIMULATION_MODE: "true"
       TRADING_MODE: "paper"
+      LIVE_TRADING_ENABLED: "false"
+      LIVE_EXECUTION_ADAPTER: "disabled"
       CORS_ORIGINS: "http://localhost:3000"
       MONGO_URL: "mongodb://localhost:27017"
       DB_NAME: "trading_bot_ci"
@@ -46,3 +49,12 @@ jobs:
 
       - name: Run backend tests
         run: pytest -q
+
+      - name: Validate operational readiness defaults
+        run: |
+          python - <<'PY'
+          from services.operational_readiness_v2 import OperationalReadinessServiceV2
+          result = OperationalReadinessServiceV2().validate_environment(strict=False)
+          assert result["status"] in {"ready", "degraded"}
+          assert any(check["name"] == "live_trading_disabled_by_default" for check in result["checks"])
+          PY
