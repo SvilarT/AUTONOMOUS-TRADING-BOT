@@ -29,5 +29,7 @@ class MongoIndexServiceV2:
         await create(self.db.execution_locks, [("key", 1)], unique=True, name="uniq_execution_lock")
         await create(self.db.execution_locks, [("expires_at", 1)], name="execution_lock_expiry")
         await create(self.db.alerts, [("user_id", 1), ("created_at", -1)], name="alerts_user_created")
+        await create(self.db.auth_failures, [("email", 1), ("created_at", -1)], name="auth_failures_email_created")
+        await create(self.db.auth_failures, [("created_at", 1)], expireAfterSeconds=3600, name="auth_failures_ttl")
 
         return {"status": "ok", "created_or_verified": created}
