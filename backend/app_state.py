@@ -10,6 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 
 from services.bot_manager import BotManager
+from services.mongo_indexes_v2 import MongoIndexServiceV2
 from services.structured_logging import configure_logging, log_event
 
 ROOT_DIR = Path(__file__).parent
@@ -32,6 +33,13 @@ bot_manager = None
 async def lifespan(app):
     global bot_manager
     log_event(logger, logging.INFO, "app_starting", service="autonomous_trading_bot")
+    try:
+        index_result = await MongoIndexServiceV2(db).ensure_indexes()
+        log_event(logger, logging.INFO, "mongo_indexes_ready", result=index_result)
+    except Exception as exc:
+        log_event(logger, logging.ERROR, "mongo_index_setup_failed", error=str(exc))
+        raise
+
     bot_manager = BotManager(db)
     manager_task = asyncio.create_task(bot_manager.start_manager())
     log_event(logger, logging.INFO, "bot_manager_started")
