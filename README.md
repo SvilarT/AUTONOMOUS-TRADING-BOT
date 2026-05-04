@@ -4,6 +4,8 @@ An AI-powered cryptocurrency trading bot prototype with market analysis, risk-ma
 
 > **Current execution status:** autonomous bot execution remains paper/simulation-only through `BotEngine -> ExecutionServiceV2 -> TradingServiceV2`. Separately, the API contains manually invoked, gated live Coinbase order endpoints through `LiveTradingServiceV2`. Those endpoints are fail-closed by default and are not production-ready for autonomous live trading.
 
+> This is for educational/backtesting/paper-trading use only. Live trading involves substantial risk of loss. Not financial advice.
+
 ## Features
 
 ### AI-Powered Analysis
@@ -40,6 +42,43 @@ An AI-powered cryptocurrency trading bot prototype with market analysis, risk-ma
 - Recharts
 - Axios
 
+## Productionization Docs
+
+- `ARCHITECTURE.md` — current architecture, safety boundaries, and target architecture
+- `PRODUCTION_ROADMAP.md` — P0 through P5 gate-based production plan
+- `docs/P1_PLATFORM_BASELINE.md` — CI, Docker, Makefile, and local production-style baseline
+
+## Quickstart: Local Docker Stack
+
+```bash
+cp .env.example .env
+make dev-up
+```
+
+Open:
+
+- Frontend: `http://localhost:3000`
+- Backend health: `http://localhost:8000/healthz`
+- Backend readiness: `http://localhost:8000/readyz`
+
+Stop the stack:
+
+```bash
+make dev-down
+```
+
+## Developer Commands
+
+```bash
+make setup-backend
+make test-backend
+make lint-backend
+make audit-backend
+make run-backend
+make setup-frontend
+make build-frontend
+```
+
 ## Getting Started
 
 ### 1. Environment Setup
@@ -70,17 +109,7 @@ CORS_ORIGINS=https://your-frontend-domain.example
 
 Do not use wildcard CORS origins in production.
 
-### 2. Launch the Application
-
-```bash
-# Check service status
-sudo supervisorctl status
-
-# Restart services if needed
-sudo supervisorctl restart backend frontend
-```
-
-### 3. Access the Dashboard
+### 2. Access the Dashboard
 
 Open your browser to: **http://localhost:3000**
 
@@ -123,14 +152,23 @@ Before any real-money deployment, the project still needs stronger production co
 
 ## P0 Safety Hardening
 
-This branch includes P0 safety hardening:
-
 1. Documentation accurately distinguishes autonomous paper execution from manually gated live endpoints.
 2. Coinbase live adapter has an adapter-level kill switch.
 3. Live trading gate tests cover fail-closed, dry-run, approval, symbol, and notional behavior.
 4. Auth input validation rejects invalid emails and weak passwords.
 5. Autonomous bot execution is regression-tested to remain blocked from live trading mode.
 6. Live order audits are written through a hash-chained audit service.
+
+## P1 Platform Baseline
+
+This branch adds the first productionization layer:
+
+1. GitHub Actions CI for backend tests, backend security checks, and frontend build.
+2. Backend dev tooling: pytest coverage, ruff, bandit, pip-audit.
+3. `.env.example` with safe paper defaults.
+4. `Makefile` commands for local operators and contributors.
+5. Dockerfiles for backend/frontend.
+6. Docker Compose stack with MongoDB, backend, and frontend.
 
 ## Safety Features
 
