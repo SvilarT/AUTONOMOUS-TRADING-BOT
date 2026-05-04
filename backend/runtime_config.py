@@ -1,9 +1,17 @@
 import logging
 import os
+from enum import Enum
 from typing import List
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+class RuntimeRole(str, Enum):
+    API = "api"
+    WORKER = "worker"
+    ALL = "all"
+    INDEXES = "indexes"
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -15,6 +23,15 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 def parse_csv_env(name: str, default: str) -> List[str]:
     return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
+
+
+def parse_runtime_role(raw_role: str | None) -> RuntimeRole:
+    normalized = str(raw_role or "all").strip().lower()
+    try:
+        return RuntimeRole(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(role.value for role in RuntimeRole)
+        raise RuntimeError(f"Invalid RUNTIME_ROLE={raw_role!r}. Allowed values: {allowed}") from exc
 
 
 def validate_origin(origin: str) -> None:
@@ -48,6 +65,9 @@ def validate_jwt_secret(secret: str, debug: bool) -> None:
 
 DEBUG = env_bool("DEBUG", False)
 SIMULATION_MODE = env_bool("SIMULATION_MODE", True)
+RUNTIME_ROLE = parse_runtime_role(os.getenv("RUNTIME_ROLE", "all" if DEBUG else "api"))
+RUN_MONGO_INDEX_BOOTSTRAP = env_bool("RUN_MONGO_INDEX_BOOTSTRAP", DEBUG)
+API_EMBED_BOT_MANAGER = env_bool("API_EMBED_BOT_MANAGER", DEBUG or RUNTIME_ROLE == RuntimeRole.ALL)
 OPS_ADMIN_ENABLED = env_bool("OPS_ADMIN_ENABLED", False)
 OPS_ADMIN_EMAILS = {email.lower() for email in parse_csv_env("OPS_ADMIN_EMAILS", "")}
 
