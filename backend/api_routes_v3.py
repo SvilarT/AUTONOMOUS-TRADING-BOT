@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from api_routes_v2 import api_router
 from auth_core import get_current_user
 from fastapi import Depends, HTTPException
@@ -10,6 +12,8 @@ from services.ledger_service_v2 import LedgerServiceV2
 from services.live_readonly_service_v2 import LiveReadonlyServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateV2
 from services.live_trading_service_v2 import LiveTradingServiceV2
+from services.mongo_indexes_v2 import MongoIndexServiceV2
+from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
 from services.trading_mode_v2 import TradingModeService
 from app_state import db
@@ -70,6 +74,10 @@ class LiveMarketSellRequest(BaseModel):
     reference_price: float = Field(gt=0)
     approval_token: str | None = None
     dry_run: bool = True
+
+
+class EmergencyHaltRequest(BaseModel):
+    reason: str = Field(default="operator emergency halt")
 
 
 @api_router.get("/trading-mode")
@@ -207,3 +215,30 @@ async def live_market_sell(request: LiveMarketSellRequest, current_user: dict = 
 @api_router.get("/live-trading/audits")
 async def get_live_order_audits(current_user: dict = Depends(get_current_user), limit: int = 100):
     return {"audits": await LiveTradingServiceV2(db).list_audits(current_user["id"], limit=limit)}
+
+
+@api_router.get("/ops/readiness")
+async def get_operational_readiness(current_user: dict = Depends(get_current_user), strict: bool = False):
+    return await OperationalReadinessServiceV2().readiness(db, strict=strict)
+
+
+@api_router.post("/ops/indexes/ensure")
+async def ensure_mongo_indexes(current_user: dict = Depends(get_current_user)):
+    return await MongoIndexServiceV2(db).ensure_indexes()
+
+
+@api_router.post("/ops/emergency-halt")
+async def emergency_halt(request: EmergencyHaltRequest, current_user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.bot_configs.update_many(
+        {"user_id": current_user["id"]},
+        {"$set": {"is_active": False, "halt_reason": request.reason, "updated_at": now}},
+    )
+    await AlertService(db).emit(
+        current_user["id"],
+        "operator_emergency_halt",
+        "critical",
+        f"Emergency halt triggered: {request.reason}",
+        {"modified_count": getattr(result, "modified_count", None), "reason": request.reason},
+    )
+    return {"status": "halted", "reason": request.reason, "modified_count": getattr(result, "modified_count", None), "timestamp": now}
