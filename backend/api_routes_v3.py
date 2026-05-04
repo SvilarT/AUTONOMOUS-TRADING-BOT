@@ -17,6 +17,7 @@ from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
 from services.trading_mode_v2 import TradingModeService
 from app_state import db
+from runtime_config import DEBUG, OPS_ADMIN_EMAILS, OPS_ADMIN_ENABLED
 
 
 class BacktestRequest(BaseModel):
@@ -78,6 +79,15 @@ class LiveMarketSellRequest(BaseModel):
 
 class EmergencyHaltRequest(BaseModel):
     reason: str = Field(default="operator emergency halt")
+
+
+async def require_ops_admin(current_user: dict = Depends(get_current_user)):
+    if DEBUG and not OPS_ADMIN_ENABLED:
+        return current_user
+    email = str(current_user.get("email", "")).lower().strip()
+    if OPS_ADMIN_ENABLED and email in OPS_ADMIN_EMAILS:
+        return current_user
+    raise HTTPException(status_code=403, detail="Admin privileges required")
 
 
 @api_router.get("/trading-mode")
@@ -223,7 +233,7 @@ async def get_operational_readiness(current_user: dict = Depends(get_current_use
 
 
 @api_router.post("/ops/indexes/ensure")
-async def ensure_mongo_indexes(current_user: dict = Depends(get_current_user)):
+async def ensure_mongo_indexes(current_user: dict = Depends(require_ops_admin)):
     return await MongoIndexServiceV2(db).ensure_indexes()
 
 
