@@ -4,9 +4,12 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 from services.alert_service import AlertService
 from services.backtesting_service_v2 import BacktestConfig, BacktestingServiceV2
+from services.coinbase_live_execution_adapter_v2 import CoinbaseLiveExecutionError
 from services.coinbase_readonly_adapter_v2 import CoinbaseReadonlyError
 from services.ledger_service_v2 import LedgerServiceV2
 from services.live_readonly_service_v2 import LiveReadonlyServiceV2
+from services.live_trading_gate_v2 import LiveTradingGateV2
+from services.live_trading_service_v2 import LiveTradingServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
 from services.trading_mode_v2 import TradingModeService
 from app_state import db
@@ -52,6 +55,21 @@ class ReconciliationRequest(BaseModel):
 
 class LiveReadonlySymbolsRequest(BaseModel):
     symbols: list[str] = Field(default_factory=lambda: ["BTC-USD", "ETH-USD"])
+
+
+class LiveMarketBuyRequest(BaseModel):
+    symbol: str = "BTC-USD"
+    notional_usd: float = Field(gt=0)
+    approval_token: str | None = None
+    dry_run: bool = True
+
+
+class LiveMarketSellRequest(BaseModel):
+    symbol: str = "BTC-USD"
+    base_units: float = Field(gt=0)
+    reference_price: float = Field(gt=0)
+    approval_token: str | None = None
+    dry_run: bool = True
 
 
 @api_router.get("/trading-mode")
@@ -150,3 +168,42 @@ async def get_live_readonly_fills(current_user: dict = Depends(get_current_user)
         return await LiveReadonlyServiceV2(db).recent_fills(current_user["id"], product_id=product_id, limit=limit)
     except CoinbaseReadonlyError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@api_router.get("/live-trading/gate")
+async def get_live_trading_gate(current_user: dict = Depends(get_current_user)):
+    return LiveTradingGateV2().describe()
+
+
+@api_router.post("/live-trading/market-buy")
+async def live_market_buy(request: LiveMarketBuyRequest, current_user: dict = Depends(get_current_user)):
+    try:
+        return await LiveTradingServiceV2(db).place_market_buy(
+            current_user["id"],
+            request.symbol,
+            request.notional_usd,
+            approval_token=request.approval_token,
+            dry_run=request.dry_run,
+        )
+    except CoinbaseLiveExecutionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@api_router.post("/live-trading/market-sell")
+async def live_market_sell(request: LiveMarketSellRequest, current_user: dict = Depends(get_current_user)):
+    try:
+        return await LiveTradingServiceV2(db).place_market_sell(
+            current_user["id"],
+            request.symbol,
+            request.base_units,
+            reference_price=request.reference_price,
+            approval_token=request.approval_token,
+            dry_run=request.dry_run,
+        )
+    except CoinbaseLiveExecutionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@api_router.get("/live-trading/audits")
+async def get_live_order_audits(current_user: dict = Depends(get_current_user), limit: int = 100):
+    return {"audits": await LiveTradingServiceV2(db).list_audits(current_user["id"], limit=limit)}
