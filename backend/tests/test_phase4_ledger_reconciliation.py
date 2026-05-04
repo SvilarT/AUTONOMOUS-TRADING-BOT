@@ -155,6 +155,33 @@ async def test_reconciliation_reports_ok_when_state_matches_ledger():
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_reports_ok_with_nonzero_buy_fee():
+    db = FakeDB()
+    portfolio = PortfolioServiceV2(db)
+
+    await portfolio.ensure_account_state("user-1", starting_cash=1000.0)
+    await portfolio.record_buy_fill(
+        "user-1",
+        "BTC-USD",
+        filled_price=100.0,
+        base_units=1.0,
+        notional_usd=100.0,
+        fee_usd=0.1,
+        order={"order_id": "buy-fee-1", "client_order_id": "client-buy-fee-1"},
+    )
+
+    state = await db.portfolio_state.find_one({"user_id": "user-1"}, {"_id": 0})
+    position = await db.positions_v2.find_one({"user_id": "user-1", "symbol": "BTC-USD"}, {"_id": 0})
+    report = await portfolio.reconcile_with_ledger("user-1", starting_cash=1000.0)
+
+    assert state["cash_balance"] == 900.0
+    assert position["notional_usd"] == 100.0
+    assert position["fees_paid_usd"] == 0.1
+    assert report["status"] == "ok"
+    assert report["issues"] == []
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_detects_cash_and_position_mismatches():
     db = FakeDB()
     portfolio = PortfolioServiceV2(db)
