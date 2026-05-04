@@ -1,35 +1,26 @@
-import random
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+from services.paper_execution_adapter_v2 import PaperExecutionAdapterV2
 
 
 class TradingServiceV2:
+    """Trading service facade.
+
+    V2 remains simulation/paper only. It delegates to a paper execution adapter
+    that models order lifecycle, market-reference pricing, costs, slippage,
+    precision, minimum sizes, rejections, and partial fills.
+    """
+
+    def __init__(self, adapter: Optional[PaperExecutionAdapterV2] = None):
+        self.adapter = adapter or PaperExecutionAdapterV2()
+
     async def place_market_buy(
         self,
         symbol: str,
         notional_usd: float,
         client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        base_prices = {
-            "BTC-USD": 45000.0,
-            "ETH-USD": 2500.0,
-        }
-        base_price = base_prices.get(symbol, 1000.0)
-        slippage = random.uniform(0.001, 0.003)
-        filled_price = base_price * (1 + slippage)
-        fee_usd = round(float(notional_usd) * 0.001, 8)
-        base_units = float(notional_usd) / filled_price if filled_price else 0.0
-
-        return {
-            "success": True,
-            "order_id": client_order_id or f"sim_buy_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "status": "filled",
-            "filled_price": round(filled_price, 8),
-            "base_units": round(base_units, 12),
-            "notional_usd": round(float(notional_usd), 8),
-            "fee_usd": fee_usd,
-            "simulation": True,
-        }
+        return await self.adapter.place_market_buy(symbol=symbol, notional_usd=notional_usd, client_order_id=client_order_id)
 
     async def place_market_sell(
         self,
@@ -37,23 +28,4 @@ class TradingServiceV2:
         base_units: float,
         client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        base_prices = {
-            "BTC-USD": 45000.0,
-            "ETH-USD": 2500.0,
-        }
-        base_price = base_prices.get(symbol, 1000.0)
-        slippage = random.uniform(0.001, 0.003)
-        filled_price = base_price * (1 - slippage)
-        notional_usd = float(base_units) * filled_price
-        fee_usd = round(notional_usd * 0.001, 8)
-
-        return {
-            "success": True,
-            "order_id": client_order_id or f"sim_sell_{int(datetime.now(timezone.utc).timestamp() * 1000)}",
-            "status": "filled",
-            "filled_price": round(filled_price, 8),
-            "base_units": round(float(base_units), 12),
-            "notional_usd": round(notional_usd, 8),
-            "fee_usd": fee_usd,
-            "simulation": True,
-        }
+        return await self.adapter.place_market_sell(symbol=symbol, base_units=base_units, client_order_id=client_order_id)
