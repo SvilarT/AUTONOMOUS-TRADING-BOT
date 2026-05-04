@@ -4,7 +4,9 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 from services.alert_service import AlertService
 from services.backtesting_service_v2 import BacktestConfig, BacktestingServiceV2
+from services.coinbase_readonly_adapter_v2 import CoinbaseReadonlyError
 from services.ledger_service_v2 import LedgerServiceV2
+from services.live_readonly_service_v2 import LiveReadonlyServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
 from services.trading_mode_v2 import TradingModeService
 from app_state import db
@@ -46,6 +48,10 @@ class WalkForwardRequest(BacktestRequest):
 
 class ReconciliationRequest(BaseModel):
     starting_cash: float = Field(default=10000.0, gt=0)
+
+
+class LiveReadonlySymbolsRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: ["BTC-USD", "ETH-USD"])
 
 
 @api_router.get("/trading-mode")
@@ -112,3 +118,35 @@ async def rebuild_ledger_state(request: ReconciliationRequest, current_user: dic
 @api_router.post("/ledger/reconcile")
 async def reconcile_ledger_state(request: ReconciliationRequest, current_user: dict = Depends(get_current_user)):
     return await LedgerServiceV2(db).reconcile(current_user["id"], starting_cash=request.starting_cash)
+
+
+@api_router.post("/live-readonly/snapshot")
+async def get_live_readonly_snapshot(request: LiveReadonlySymbolsRequest, current_user: dict = Depends(get_current_user)):
+    try:
+        return await LiveReadonlyServiceV2(db).snapshot(current_user["id"], symbols=request.symbols)
+    except CoinbaseReadonlyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@api_router.post("/live-readonly/reconcile")
+async def reconcile_live_readonly(request: LiveReadonlySymbolsRequest, current_user: dict = Depends(get_current_user)):
+    try:
+        return await LiveReadonlyServiceV2(db).compare_exchange_to_internal(current_user["id"], symbols=request.symbols)
+    except CoinbaseReadonlyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@api_router.get("/live-readonly/orders")
+async def get_live_readonly_orders(current_user: dict = Depends(get_current_user), status: str = "all", limit: int = 100):
+    try:
+        return await LiveReadonlyServiceV2(db).recent_orders(current_user["id"], status=status, limit=limit)
+    except CoinbaseReadonlyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@api_router.get("/live-readonly/fills")
+async def get_live_readonly_fills(current_user: dict = Depends(get_current_user), product_id: str | None = None, limit: int = 100):
+    try:
+        return await LiveReadonlyServiceV2(db).recent_fills(current_user["id"], product_id=product_id, limit=limit)
+    except CoinbaseReadonlyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))

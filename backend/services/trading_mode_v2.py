@@ -49,6 +49,10 @@ class TradingModeService:
         return {
             "mode": self.mode.value,
             "orders_allowed": self.is_paper,
+            "paper_execution_enabled": self.is_paper,
             "market_data_allowed": True,
+            "live_readonly_enabled": self.is_readonly,
+            "live_account_reads_allowed": self.is_readonly,
             "live_execution_enabled": False,
+            "live_order_methods_available": False,
         }
