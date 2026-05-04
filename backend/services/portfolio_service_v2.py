@@ -1,10 +1,13 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from services.ledger_service_v2 import LedgerServiceV2
+
 
 class PortfolioServiceV2:
     def __init__(self, db):
         self.db = db
+        self.ledger = LedgerServiceV2(db)
 
     @staticmethod
     def utc_now() -> str:
@@ -85,9 +88,11 @@ class PortfolioServiceV2:
             "filled_price": order.get("filled_price"),
             "fee_usd": round(float(order.get("fee_usd", 0.0) or 0.0), 8),
             "simulation": bool(order.get("simulation", False)),
+            "paper_execution": bool(order.get("paper_execution", False)),
+            "execution_adapter": order.get("execution_adapter"),
             "signal_snapshot": order.get("signal_snapshot") or context or {},
             "created_at": now,
-            "filled_at": now if order.get("status") == "filled" else None,
+            "filled_at": now if order.get("status") in {"filled", "partially_filled"} else None,
         }
         await self.db.trades_v2.insert_one(trade)
 
@@ -147,7 +152,16 @@ class PortfolioServiceV2:
             "positions_value": metrics.get("positions_value", 0.0),
         }
 
-    async def record_buy_fill(self, user_id: str, symbol: str, filled_price: float, base_units: float, notional_usd: float, fee_usd: float = 0.0) -> None:
+    async def record_buy_fill(
+        self,
+        user_id: str,
+        symbol: str,
+        filled_price: float,
+        base_units: float,
+        notional_usd: float,
+        fee_usd: float = 0.0,
+        order: Optional[Dict[str, Any]] = None,
+    ) -> None:
         await self.ensure_account_state(user_id)
         fee_usd = float(fee_usd or 0.0)
         gross_notional = float(notional_usd)
@@ -167,8 +181,17 @@ class PortfolioServiceV2:
             await self.db.positions_v2.insert_one({"user_id": user_id, "symbol": symbol, "base_units": round(units, 12), "notional_usd": round(cost_basis, 8), "avg_price": round(cost_basis / units, 8) if units > 0 else round(float(filled_price), 8), "fees_paid_usd": round(fee_usd, 8), "created_at": self.utc_now(), "updated_at": self.utc_now()})
 
         await self.db.portfolio_state.update_one({"user_id": user_id}, {"$inc": {"cash_balance": -cost_basis}, "$set": {"updated_at": self.utc_now()}}, upsert=True)
+        await self.ledger.record_buy_fill(user_id, symbol, filled_price, units, gross_notional, fee_usd, order=order)
 
-    async def record_sell_fill(self, user_id: str, symbol: str, filled_price: float, base_units: float, fee_usd: float = 0.0) -> Dict[str, Any]:
+    async def record_sell_fill(
+        self,
+        user_id: str,
+        symbol: str,
+        filled_price: float,
+        base_units: float,
+        fee_usd: float = 0.0,
+        order: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         position = await self.db.positions_v2.find_one({"user_id": user_id, "symbol": symbol})
         if not position:
             return {"realized_pnl": 0.0}
@@ -193,4 +216,11 @@ class PortfolioServiceV2:
             await self.db.positions_v2.update_one({"user_id": user_id, "symbol": symbol}, {"$set": {"base_units": round(remaining_units, 12), "notional_usd": round(remaining_notional, 8), "avg_price": round(remaining_notional / remaining_units, 8), "updated_at": self.utc_now()}})
 
         await self.db.portfolio_state.update_one({"user_id": user_id}, {"$inc": {"cash_balance": net_proceeds, "realized_pnl": realized_pnl}, "$set": {"updated_at": self.utc_now()}}, upsert=True)
+        await self.ledger.record_sell_fill(user_id, symbol, filled_price, sell_units, gross_proceeds, net_proceeds, fee_usd, sold_cost_basis, realized_pnl, order=order)
         return {"realized_pnl": round(realized_pnl, 8), "gross_proceeds": round(gross_proceeds, 8), "net_proceeds": round(net_proceeds, 8), "fee_usd": round(fee_usd, 8), "remaining_units": round(max(remaining_units, 0.0), 12)}
+
+    async def rebuild_from_ledger(self, user_id: str, starting_cash: float = 10000.0) -> Dict[str, Any]:
+        return await self.ledger.rebuild_from_ledger(user_id, starting_cash=starting_cash)
+
+    async def reconcile_with_ledger(self, user_id: str, starting_cash: float = 10000.0) -> Dict[str, Any]:
+        return await self.ledger.reconcile(user_id, starting_cash=starting_cash)

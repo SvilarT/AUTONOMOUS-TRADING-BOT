@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 from services.alert_service import AlertService
 from services.backtesting_service_v2 import BacktestConfig, BacktestingServiceV2
+from services.ledger_service_v2 import LedgerServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
 from services.trading_mode_v2 import TradingModeService
 from app_state import db
@@ -41,6 +42,10 @@ class WalkForwardRequest(BacktestRequest):
     train_periods: int = Field(default=120, ge=30, le=300)
     test_periods: int = Field(default=60, ge=30, le=300)
     periods: int = Field(default=300, ge=90, le=300)
+
+
+class ReconciliationRequest(BaseModel):
+    starting_cash: float = Field(default=10000.0, gt=0)
 
 
 @api_router.get("/trading-mode")
@@ -92,3 +97,18 @@ async def run_walk_forward(request: WalkForwardRequest, current_user: dict = Dep
     result["symbol"] = request.symbol
     result["timeframe"] = request.timeframe
     return result
+
+
+@api_router.get("/ledger/entries")
+async def get_ledger_entries(current_user: dict = Depends(get_current_user), limit: int = 250):
+    return {"entries": await LedgerServiceV2(db).list_entries(current_user["id"], limit=limit)}
+
+
+@api_router.post("/ledger/rebuild")
+async def rebuild_ledger_state(request: ReconciliationRequest, current_user: dict = Depends(get_current_user)):
+    return await LedgerServiceV2(db).rebuild_from_ledger(current_user["id"], starting_cash=request.starting_cash)
+
+
+@api_router.post("/ledger/reconcile")
+async def reconcile_ledger_state(request: ReconciliationRequest, current_user: dict = Depends(get_current_user)):
+    return await LedgerServiceV2(db).reconcile(current_user["id"], starting_cash=request.starting_cash)
