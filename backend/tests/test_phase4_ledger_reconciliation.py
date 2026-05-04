@@ -1,3 +1,8 @@
+import os
+
+os.environ.setdefault("DEBUG", "True")
+os.environ.setdefault("JWT_SECRET", "test-secret-for-route-model-import")
+
 import pytest
 
 from api_routes_v2 import BotConfig
