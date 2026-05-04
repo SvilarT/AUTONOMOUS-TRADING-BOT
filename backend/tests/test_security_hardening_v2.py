@@ -1,3 +1,9 @@
+import os
+
+os.environ.setdefault("DEBUG", "True")
+os.environ.setdefault("JWT_SECRET", "test-secret-for-security-tests")
+os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
+
 import pytest
 from fastapi import HTTPException
 
