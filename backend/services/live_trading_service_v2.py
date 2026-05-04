@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 
 from services.coinbase_live_execution_adapter_v2 import CoinbaseLiveExecutionAdapterV2, CoinbaseLiveExecutionError
 from services.execution_service_v2 import ExecutionServiceV2
+from services.live_order_audit_service_v2 import LiveOrderAuditServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateV2
 from services.trading_mode_v2 import TradingModeService
 
@@ -11,14 +12,15 @@ class LiveTradingServiceV2:
     """Gated live execution orchestration.
 
     This service is the only intended entrypoint for live orders. It performs a
-    gate preflight, writes an audit record, supports dry-run previews, and only
-    then delegates to the live adapter.
+    gate preflight, writes a hash-chained audit record, supports dry-run
+    previews, and only then delegates to the live adapter.
     """
 
     def __init__(self, db, adapter: Optional[CoinbaseLiveExecutionAdapterV2] = None, gate: Optional[LiveTradingGateV2] = None):
         self.db = db
         self.adapter = adapter or CoinbaseLiveExecutionAdapterV2()
         self.gate = gate or LiveTradingGateV2()
+        self.audits = LiveOrderAuditServiceV2(db)
 
     @staticmethod
     def utc_now() -> str:
@@ -28,9 +30,7 @@ class LiveTradingServiceV2:
         return await self.db.bot_configs.find_one({"user_id": user_id}, {"_id": 0}) or {}
 
     async def _audit(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        payload = {"created_at": self.utc_now(), **record}
-        await self.db.live_order_audits.insert_one(payload)
-        return payload
+        return await self.audits.append(record)
 
     async def preview_market_buy(self, user_id: str, symbol: str, notional_usd: float) -> Dict[str, Any]:
         return await self.place_market_buy(user_id, symbol, notional_usd, dry_run=True)
@@ -129,3 +129,6 @@ class LiveTradingServiceV2:
 
     async def list_audits(self, user_id: str, limit: int = 100):
         return await self.db.live_order_audits.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+
+    async def verify_audit_chain(self, user_id: str, limit: int = 1000):
+        return await self.audits.verify_user_chain(user_id, limit=limit)
