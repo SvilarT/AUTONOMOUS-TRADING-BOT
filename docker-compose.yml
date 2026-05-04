@@ -12,6 +12,22 @@ services:
       timeout: 5s
       retries: 5
 
+  indexes:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      RUNTIME_ROLE: indexes
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: trading_bot
+      COINBASE_LIVE_ORDER_KILL_SWITCH: "true"
+    command: ["python", "manage_indexes.py"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+
   backend:
     build:
       context: ./backend
@@ -19,6 +35,9 @@ services:
     env_file:
       - .env
     environment:
+      RUNTIME_ROLE: api
+      API_EMBED_BOT_MANAGER: "false"
+      RUN_MONGO_INDEX_BOOTSTRAP: "false"
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: trading_bot
       COINBASE_LIVE_ORDER_KILL_SWITCH: "true"
@@ -27,12 +46,33 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      indexes:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).read()"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RUNTIME_ROLE: worker
+      RUN_MONGO_INDEX_BOOTSTRAP: "false"
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: trading_bot
+      COINBASE_LIVE_ORDER_KILL_SWITCH: "true"
+    command: ["python", "worker.py"]
+    depends_on:
+      mongo:
+        condition: service_healthy
+      indexes:
+        condition: service_completed_successfully
 
   frontend:
     build:
