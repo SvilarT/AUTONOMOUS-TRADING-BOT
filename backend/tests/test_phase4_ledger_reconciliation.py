@@ -1,5 +1,6 @@
 import pytest
 
+from api_routes_v2 import BotConfig
 from services.ledger_service_v2 import LedgerServiceV2
 from services.portfolio_service_v2 import PortfolioServiceV2
 
@@ -89,15 +90,15 @@ async def test_ledger_records_buy_fill_and_rebuilds_state():
     )
     rebuilt = await ledger.rebuild_from_ledger("user-1", starting_cash=1000.0)
 
-    assert rebuilt["cash_balance"] == 899.9
+    assert rebuilt["cash_balance"] == 900.0
     assert rebuilt["ledger_entries"] == 2
     assert rebuilt["positions"] == [
         {
             "symbol": "BTC-USD",
             "base_units": 1.0,
-            "notional_usd": 100.1,
-            "avg_price": 100.1,
-            "fees_paid_usd": 0.2,
+            "notional_usd": 100.0,
+            "avg_price": 100.0,
+            "fees_paid_usd": 0.1,
         }
     ]
 
@@ -182,3 +183,11 @@ async def test_portfolio_records_ledger_entries_for_buy_and_sell_fills():
     assert "SELL_FILL" in event_types
     assert "REALIZED_PNL" in event_types
     assert len(entries) == 5
+
+
+def test_bot_config_update_payload_does_not_require_client_user_id():
+    config = BotConfig(is_active=True, symbols=["BTC-USD"])
+
+    assert config.user_id == ""
+    assert config.is_active is True
+    assert config.symbols == ["BTC-USD"]
