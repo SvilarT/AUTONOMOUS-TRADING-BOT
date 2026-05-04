@@ -1,6 +1,7 @@
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+from services.settings_v2 import SETTINGS, SettingsV2, TradingMode
 
 
 class OperationalReadinessServiceV2:
@@ -9,13 +10,6 @@ class OperationalReadinessServiceV2:
     @staticmethod
     def utc_now() -> str:
         return datetime.now(timezone.utc).isoformat()
-
-    @staticmethod
-    def env_bool(name: str, default: bool = False) -> bool:
-        value = os.getenv(name)
-        if value is None:
-            return default
-        return value.strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _check(name: str, passed: bool, severity: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -27,42 +21,38 @@ class OperationalReadinessServiceV2:
             "metadata": metadata or {},
         }
 
-    def validate_environment(self, strict: bool = False) -> Dict[str, Any]:
-        debug = self.env_bool("DEBUG", False)
-        simulation = self.env_bool("SIMULATION_MODE", True)
-        trading_mode = os.getenv("TRADING_MODE", "paper")
-        live_enabled = self.env_bool("LIVE_TRADING_ENABLED", False)
-        live_adapter = os.getenv("LIVE_EXECUTION_ADAPTER", "disabled")
-        cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
+    def validate_environment(self, strict: bool = False, settings: SettingsV2 = SETTINGS) -> Dict[str, Any]:
         checks: List[Dict[str, Any]] = []
 
-        checks.append(self._check("jwt_secret_configured", bool(os.getenv("JWT_SECRET")), "critical", "JWT_SECRET must be configured."))
-        checks.append(self._check("mongo_url_configured", bool(os.getenv("MONGO_URL")), "critical", "MONGO_URL must be configured."))
-        checks.append(self._check("db_name_configured", bool(os.getenv("DB_NAME")), "critical", "DB_NAME must be configured."))
-        checks.append(self._check("cors_origins_explicit", bool(cors_origins) and "*" not in cors_origins, "critical", "CORS_ORIGINS must be explicit; wildcard is not allowed outside debug."))
-        checks.append(self._check("valid_trading_mode", trading_mode in {"paper", "live-readonly", "live-trading"}, "critical", "TRADING_MODE must be paper, live-readonly, or live-trading.", {"trading_mode": trading_mode}))
-        checks.append(self._check("live_trading_disabled_by_default", not live_enabled or trading_mode == "live-trading", "critical", "LIVE_TRADING_ENABLED should only be true with TRADING_MODE=live-trading.", {"live_trading_enabled": live_enabled, "trading_mode": trading_mode}))
+        checks.append(self._check("jwt_secret_configured", bool(settings.jwt_secret), "critical", "JWT_SECRET must be configured."))
+        checks.append(self._check("mongo_url_configured", bool(settings.mongo_url), "critical", "MONGO_URL must be configured."))
+        checks.append(self._check("db_name_configured", bool(settings.db_name), "critical", "DB_NAME must be configured."))
+        checks.append(self._check("cors_origins_explicit", bool(settings.cors_origins) and "*" not in settings.cors_origins, "critical", "CORS_ORIGINS must be explicit; wildcard is not allowed outside debug."))
+        checks.append(self._check("valid_runtime_role", settings.runtime_role.value in {"api", "worker", "all", "indexes"}, "critical", "RUNTIME_ROLE must be api, worker, all, or indexes.", {"runtime_role": settings.runtime_role.value}))
+        checks.append(self._check("valid_trading_mode", settings.trading_mode.value in {"paper", "live-readonly", "live-trading"}, "critical", "TRADING_MODE must be paper, live-readonly, or live-trading.", {"trading_mode": settings.trading_mode.value}))
+        checks.append(self._check("live_trading_disabled_by_default", not settings.live_trading_enabled or settings.trading_mode == TradingMode.LIVE_TRADING, "critical", "LIVE_TRADING_ENABLED should only be true with TRADING_MODE=live-trading.", {"live_trading_enabled": settings.live_trading_enabled, "trading_mode": settings.trading_mode.value}))
 
-        if trading_mode == "paper":
-            checks.append(self._check("paper_mode_simulation", simulation, "warning", "Paper mode should normally run with SIMULATION_MODE=true."))
+        if settings.trading_mode == TradingMode.PAPER:
+            checks.append(self._check("paper_mode_simulation", settings.simulation_mode, "warning", "Paper mode should normally run with SIMULATION_MODE=true."))
 
-        if trading_mode == "live-readonly":
-            checks.append(self._check("coinbase_readonly_key", bool(os.getenv("COINBASE_EXCHANGE_API_KEY")), "critical", "Readonly Coinbase API key required."))
-            checks.append(self._check("coinbase_readonly_secret", bool(os.getenv("COINBASE_EXCHANGE_API_SECRET")), "critical", "Readonly Coinbase API secret required."))
-            checks.append(self._check("coinbase_readonly_passphrase", bool(os.getenv("COINBASE_EXCHANGE_PASSPHRASE")), "critical", "Readonly Coinbase passphrase required."))
-            checks.append(self._check("live_execution_off_in_readonly", not live_enabled, "critical", "LIVE_TRADING_ENABLED must be false in live-readonly mode."))
+        if settings.trading_mode == TradingMode.LIVE_READONLY:
+            checks.append(self._check("coinbase_readonly_key", bool(settings.coinbase_exchange_api_key), "critical", "Readonly Coinbase API key required."))
+            checks.append(self._check("coinbase_readonly_secret", bool(settings.coinbase_exchange_api_secret), "critical", "Readonly Coinbase API secret required."))
+            checks.append(self._check("coinbase_readonly_passphrase", bool(settings.coinbase_exchange_passphrase), "critical", "Readonly Coinbase passphrase required."))
+            checks.append(self._check("live_execution_off_in_readonly", not settings.live_trading_enabled, "critical", "LIVE_TRADING_ENABLED must be false in live-readonly mode."))
 
-        if trading_mode == "live-trading":
-            checks.append(self._check("live_global_gate_enabled", live_enabled, "critical", "LIVE_TRADING_ENABLED must be true for live-trading mode."))
-            checks.append(self._check("live_adapter_selected", live_adapter == "coinbase_exchange_v2", "critical", "LIVE_EXECUTION_ADAPTER must be coinbase_exchange_v2."))
-            checks.append(self._check("live_approval_token_configured", bool(os.getenv("LIVE_APPROVAL_TOKEN")), "critical", "LIVE_APPROVAL_TOKEN must be configured for non-dry-run live orders."))
-            checks.append(self._check("live_max_notional_low", float(os.getenv("LIVE_MAX_ORDER_NOTIONAL_USD", "999999") or 999999) <= 25.0, "warning", "Initial live max order notional should be <= 25 USD."))
-            checks.append(self._check("coinbase_live_key", bool(os.getenv("COINBASE_EXCHANGE_API_KEY")), "critical", "Coinbase API key required."))
-            checks.append(self._check("coinbase_live_secret", bool(os.getenv("COINBASE_EXCHANGE_API_SECRET")), "critical", "Coinbase API secret required."))
-            checks.append(self._check("coinbase_live_passphrase", bool(os.getenv("COINBASE_EXCHANGE_PASSPHRASE")), "critical", "Coinbase passphrase required."))
+        if settings.trading_mode == TradingMode.LIVE_TRADING:
+            checks.append(self._check("live_global_gate_enabled", settings.live_trading_enabled, "critical", "LIVE_TRADING_ENABLED must be true for live-trading mode."))
+            checks.append(self._check("live_adapter_selected", settings.live_execution_adapter == "coinbase_exchange_v2", "critical", "LIVE_EXECUTION_ADAPTER must be coinbase_exchange_v2."))
+            checks.append(self._check("live_approval_token_configured", bool(settings.live_approval_token), "critical", "LIVE_APPROVAL_TOKEN must be configured for non-dry-run live orders."))
+            checks.append(self._check("live_max_notional_low", settings.live_max_order_notional_usd <= 25.0, "warning", "Initial live max order notional should be <= 25 USD."))
+            checks.append(self._check("coinbase_live_key", bool(settings.coinbase_exchange_api_key), "critical", "Coinbase API key required."))
+            checks.append(self._check("coinbase_live_secret", bool(settings.coinbase_exchange_api_secret), "critical", "Coinbase API secret required."))
+            checks.append(self._check("coinbase_live_passphrase", bool(settings.coinbase_exchange_passphrase), "critical", "Coinbase passphrase required."))
+            checks.append(self._check("live_order_kill_switch_default", settings.coinbase_live_order_kill_switch, "warning", "COINBASE_LIVE_ORDER_KILL_SWITCH should default to true outside approved execution windows."))
 
-        if not debug:
-            checks.append(self._check("debug_disabled", not debug, "critical", "DEBUG must be false in production."))
+        if not settings.debug:
+            checks.append(self._check("debug_disabled", not settings.debug, "critical", "DEBUG must be false in production."))
 
         failed_critical = [check for check in checks if not check["passed"] and check["severity"] == "critical"]
         failed_warning = [check for check in checks if not check["passed"] and check["severity"] == "warning"]
@@ -72,6 +62,7 @@ class OperationalReadinessServiceV2:
         return {
             "status": status,
             "strict": strict,
+            "settings": settings.redacted_report(),
             "checks": checks,
             "summary": {
                 "total": len(checks),
