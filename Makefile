@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: help setup-backend test-backend lint-backend audit-backend run-backend setup-frontend build-frontend dev-up dev-down logs copy-env
+.PHONY: help setup-backend test-backend lint-backend audit-backend run-backend run-worker indexes setup-frontend build-frontend dev-up dev-down logs copy-env
 
 help:
 	@echo "Autonomous Trading Bot commands"
@@ -9,7 +9,9 @@ help:
 	@echo "  make test-backend    Run backend test suite"
 	@echo "  make lint-backend    Run backend lint/security scan"
 	@echo "  make audit-backend   Run backend dependency audit"
-	@echo "  make run-backend     Run FastAPI backend locally"
+	@echo "  make run-backend     Run FastAPI API role locally"
+	@echo "  make run-worker      Run dedicated bot worker role locally"
+	@echo "  make indexes         Create/verify Mongo indexes"
 	@echo "  make setup-frontend  Install frontend dependencies"
 	@echo "  make build-frontend  Build frontend"
 	@echo "  make dev-up          Start local Docker compose stack"
@@ -32,7 +34,13 @@ audit-backend:
 	cd backend && python -m pip_audit -r requirements.txt
 
 run-backend:
-	cd backend && uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+	cd backend && RUNTIME_ROLE=api API_EMBED_BOT_MANAGER=false RUN_MONGO_INDEX_BOOTSTRAP=false uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+
+run-worker:
+	cd backend && RUNTIME_ROLE=worker RUN_MONGO_INDEX_BOOTSTRAP=false python worker.py
+
+indexes:
+	cd backend && RUNTIME_ROLE=indexes python manage_indexes.py
 
 setup-frontend:
 	cd frontend && npm install --legacy-peer-deps
