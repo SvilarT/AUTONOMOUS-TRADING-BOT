@@ -76,7 +76,7 @@ class LedgerServiceV2:
         order = order or {}
         gross_notional = float(notional_usd)
         fee = float(fee_usd or 0.0)
-        cost_basis = gross_notional + fee
+        cost_basis = gross_notional
         common = {
             "user_id": user_id,
             "symbol": symbol,
@@ -184,13 +184,15 @@ class LedgerServiceV2:
 
         for entry in entries:
             symbol = entry.get("symbol")
+            event_type = entry.get("event_type")
             cash_balance += float(entry.get("cash_delta", 0.0) or 0.0)
             realized_pnl += float(entry.get("realized_pnl", 0.0) or 0.0)
             if symbol:
                 position = positions.setdefault(symbol, {"base_units": 0.0, "notional_usd": 0.0, "fees_paid_usd": 0.0})
                 position["base_units"] += float(entry.get("base_delta", 0.0) or 0.0)
                 position["notional_usd"] += float(entry.get("cost_basis_delta", 0.0) or 0.0)
-                position["fees_paid_usd"] += float(entry.get("fee_usd", 0.0) or 0.0)
+                if event_type == "FEE":
+                    position["fees_paid_usd"] += float(entry.get("fee_usd", 0.0) or 0.0)
 
         normalized_positions = []
         for symbol, position in positions.items():
