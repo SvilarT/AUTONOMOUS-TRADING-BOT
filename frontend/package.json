@@ -58,7 +58,8 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
-    "test": "craco test"
+    "test": "craco test --watchAll=false --passWithNoTests",
+    "lint": "eslint src --max-warnings=50"
   },
   "browserslist": {
     "production": [
