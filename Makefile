@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 
-.PHONY: help setup-backend test-backend lint-backend audit-backend run-backend run-worker indexes setup-frontend build-frontend dev-up dev-down logs copy-env
+.PHONY: help setup-backend test-backend lint-backend audit-backend run-backend run-worker indexes setup-frontend lint-frontend test-frontend build-frontend ci-local dev-up dev-down logs copy-env
 
 help:
 	@echo "Autonomous Trading Bot commands"
@@ -13,7 +13,10 @@ help:
 	@echo "  make run-worker      Run dedicated bot worker role locally"
 	@echo "  make indexes         Create/verify Mongo indexes"
 	@echo "  make setup-frontend  Install frontend dependencies"
+	@echo "  make lint-frontend   Run frontend lint"
+	@echo "  make test-frontend   Run frontend tests in CI mode"
 	@echo "  make build-frontend  Build frontend"
+	@echo "  make ci-local        Run local CI-equivalent checks"
 	@echo "  make dev-up          Start local Docker compose stack"
 	@echo "  make dev-down        Stop local Docker compose stack"
 	@echo "  make logs            Tail local Docker compose logs"
@@ -25,7 +28,7 @@ setup-backend:
 	cd backend && python -m pip install --upgrade pip setuptools wheel && python -m pip install -r requirements.txt -r requirements-dev.txt
 
 test-backend:
-	cd backend && DEBUG=True JWT_SECRET=test-secret-with-more-than-32-characters CORS_ORIGINS=http://localhost:3000 python -m pytest tests
+	cd backend && DEBUG=True JWT_SECRET=test-secret-with-more-than-32-characters CORS_ORIGINS=http://localhost:3000 MONGO_URL=mongodb://localhost:27017 python -m pytest tests --cov=. --cov-report=term-missing --cov-fail-under=70
 
 lint-backend:
 	cd backend && python -m ruff check . && python -m bandit -q -r . -x tests
@@ -45,8 +48,16 @@ indexes:
 setup-frontend:
 	cd frontend && npm install --legacy-peer-deps
 
+lint-frontend:
+	cd frontend && npm run lint
+
+test-frontend:
+	cd frontend && CI=false npm test -- --watchAll=false --passWithNoTests
+
 build-frontend:
 	cd frontend && REACT_APP_BACKEND_URL=http://localhost:8000 CI=false npm run build
+
+ci-local: test-backend lint-backend audit-backend lint-frontend test-frontend build-frontend
 
 dev-up: copy-env
 	docker compose up --build

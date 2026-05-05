@@ -12,45 +12,64 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  DEBUG: "True"
+  JWT_SECRET: ci-local-secret-with-more-than-32-characters
+  SIMULATION_MODE: "True"
+  TRADING_MODE: paper
+  CORS_ORIGINS: http://localhost:3000
+  DB_NAME: trading_bot_ci
+  COINBASE_LIVE_ORDER_KILL_SWITCH: "true"
+  LIVE_TRADING_ENABLED: "false"
+  LIVE_EXECUTION_ADAPTER: disabled
+
 jobs:
   backend-tests:
-    name: Backend tests and safety regression suite
+    name: Backend tests with MongoDB
     runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
     env:
-      DEBUG: "True"
-      JWT_SECRET: ci-local-secret-with-more-than-32-characters
-      SIMULATION_MODE: "True"
-      TRADING_MODE: paper
-      CORS_ORIGINS: http://localhost:3000
       MONGO_URL: mongodb://localhost:27017
-      DB_NAME: trading_bot_ci
-      COINBASE_LIVE_ORDER_KILL_SWITCH: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements-dev.txt
-
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r requirements.txt -r requirements-dev.txt
-
       - name: Run backend tests
-        run: python -m pytest tests --cov=. --cov-report=term-missing --cov-fail-under=65
+        run: python -m pytest tests --cov=. --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+      - name: Upload backend coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-xml
+          path: backend/coverage.xml
+          if-no-files-found: error
 
-  backend-security:
-    name: Backend static security checks
+  backend-quality:
+    name: Backend lint, security, and dependency audit
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -58,32 +77,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements-dev.txt
-
-      - name: Install audit tooling
+      - name: Install backend tooling
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r requirements.txt -r requirements-dev.txt
-
       - name: Ruff lint
         run: python -m ruff check .
-
       - name: Bandit security scan
         run: python -m bandit -q -r . -x tests
-
       - name: Dependency audit
         run: python -m pip_audit -r requirements.txt
 
-  frontend-build:
-    name: Frontend build
+  frontend-quality:
+    name: Frontend lint, test, and build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -94,16 +108,90 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package.json
-
       - name: Install frontend dependencies
         run: npm install --legacy-peer-deps
-
+      - name: Lint frontend
+        run: npm run lint
+      - name: Test frontend
+        run: npm test -- --watchAll=false --passWithNoTests
       - name: Build frontend
         run: npm run build
+
+  docker-build:
+    name: Docker image build validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: false
+          tags: autonomous-trading-bot-backend:ci
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          load: false
+          tags: autonomous-trading-bot-frontend:ci
+          build-args: |
+            REACT_APP_BACKEND_URL=http://localhost:8000
+
+  compose-smoke:
+    name: Docker Compose smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Create CI env file
+        run: cp .env.example .env
+      - name: Build and start compose stack
+        run: docker compose up --build -d
+      - name: Wait for backend health
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8000/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - name: Check readiness endpoint
+        run: curl -fsS http://localhost:8000/readyz
+      - name: Check frontend response
+        run: curl -fsS http://localhost:3000 >/dev/null
+      - name: Show service status
+        if: always()
+        run: docker compose ps
+      - name: Show compose logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Stop compose stack
+        if: always()
+        run: docker compose down -v
+
+  ci-complete:
+    name: CI complete
+    runs-on: ubuntu-latest
+    needs:
+      - backend-tests
+      - backend-quality
+      - frontend-quality
+      - docker-build
+      - compose-smoke
+    steps:
+      - name: Confirm all CI gates passed
+        run: echo "All CI gates passed."
