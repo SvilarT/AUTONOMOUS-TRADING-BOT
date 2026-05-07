@@ -9,6 +9,7 @@ from app_state import db
 from auth_core import verify_token
 from services.api_errors_v2 import error_envelope
 from services.authorization_v2 import Scope, effective_scopes, has_scope
+from services.live_approval_challenge_service_v2 import LiveApprovalChallengeError, LiveApprovalChallengeServiceV2
 from services.request_context_v2 import get_request_id
 
 
@@ -21,6 +22,9 @@ class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
 
         if path in {"/api/live-trading/gate", "/api/live-trading/audits"}:
             return Scope.TRADING_LIVE_PREVIEW.value
+
+        if path == "/api/live-approvals/challenge":
+            return Scope.TRADING_LIVE_EXECUTE.value
 
         if path in {"/api/live-trading/market-buy", "/api/live-trading/market-sell"} and method == "POST":
             if body and body.get("dry_run") is False:
@@ -37,6 +41,10 @@ class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
             return Scope.OPS_HALT.value
 
         return None
+
+    @staticmethod
+    def is_non_dry_run_live_order(method: str, path: str, body: Optional[dict]) -> bool:
+        return method == "POST" and path in {"/api/live-trading/market-buy", "/api/live-trading/market-sell"} and bool(body and body.get("dry_run") is False)
 
     @staticmethod
     async def parse_json_body(request: Request) -> tuple[Optional[dict], bytes]:
@@ -83,6 +91,29 @@ class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
         user["effective_scopes"] = sorted(effective_scopes(user))
         return user
 
+    async def verify_live_approval(self, user: dict, path: str, body: dict) -> Optional[JSONResponse]:
+        try:
+            if path == "/api/live-trading/market-buy":
+                await LiveApprovalChallengeServiceV2(db).verify_and_consume(
+                    user_id=user["id"],
+                    approval_token=body.get("approval_token"),
+                    side="BUY",
+                    symbol=body.get("symbol"),
+                    notional_usd=body.get("notional_usd"),
+                )
+            else:
+                await LiveApprovalChallengeServiceV2(db).verify_and_consume(
+                    user_id=user["id"],
+                    approval_token=body.get("approval_token"),
+                    side="SELL",
+                    symbol=body.get("symbol"),
+                    base_units=body.get("base_units"),
+                    reference_price=body.get("reference_price"),
+                )
+        except LiveApprovalChallengeError as exc:
+            return self.auth_error(403, "FORBIDDEN", str(exc))
+        return None
+
     async def dispatch(self, request: Request, call_next):
         parsed_body = None
         raw_body = b""
@@ -100,6 +131,11 @@ class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
 
         if not has_scope(user, required_scope):
             return self.auth_error(403, "FORBIDDEN", f"Missing required scope: {required_scope}")
+
+        if self.is_non_dry_run_live_order(request.method, request.url.path, parsed_body):
+            approval_error = await self.verify_live_approval(user, request.url.path, parsed_body or {})
+            if approval_error:
+                return approval_error
 
         request.state.authorized_user = user
         return await call_next(request)
