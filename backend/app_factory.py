@@ -8,6 +8,7 @@ from runtime_config import CORS_ORIGINS
 from services.api_errors_v2 import http_exception_handler, unhandled_exception_handler, validation_exception_handler
 from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.request_context_v2 import RequestContextMiddlewareV2
+from services.scope_enforcement_middleware_v2 import ScopeEnforcementMiddlewareV2
 from services.security_headers_v2 import SecurityHeadersMiddlewareV2
 
 
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
     app.add_middleware(SecurityHeadersMiddlewareV2)
+    app.add_middleware(ScopeEnforcementMiddlewareV2)
     app.add_middleware(RequestContextMiddlewareV2)
     app.add_middleware(
         CORSMiddleware,
