@@ -15,6 +15,7 @@ class LiveTradingGateConfig:
     max_order_notional_usd: float = 25.0
     allowed_symbols: tuple[str, ...] = ("BTC-USD", "ETH-USD")
     manual_approval_required: bool = True
+    signed_approval_required: bool = True
     approval_token: Optional[str] = None
 
 
@@ -56,6 +57,7 @@ class LiveTradingGateV2:
             max_order_notional_usd=max_notional,
             allowed_symbols=symbols or ("BTC-USD", "ETH-USD"),
             manual_approval_required=cls.env_bool("LIVE_MANUAL_APPROVAL_REQUIRED", True),
+            signed_approval_required=cls.env_bool("LIVE_SIGNED_APPROVAL_REQUIRED", True),
             approval_token=os.getenv("LIVE_APPROVAL_TOKEN"),
         )
 
@@ -95,8 +97,11 @@ class LiveTradingGateV2:
         check("max_notional", float(notional_usd) <= self.config.max_order_notional_usd, "order exceeds LIVE_MAX_ORDER_NOTIONAL_USD")
 
         if self.config.manual_approval_required and not dry_run:
-            check("approval_token_configured", bool(self.config.approval_token), "LIVE_APPROVAL_TOKEN must be configured when manual approval is required")
-            check("approval_token", self.approval_tokens_match(approval_token, self.config.approval_token), "valid live approval token required")
+            if self.config.signed_approval_required:
+                check("signed_approval_token_present", bool(approval_token), "signed live approval challenge token required")
+            else:
+                check("approval_token_configured", bool(self.config.approval_token), "LIVE_APPROVAL_TOKEN must be configured when manual approval is required")
+                check("approval_token", self.approval_tokens_match(approval_token, self.config.approval_token), "valid live approval token required")
 
         return {
             "allowed": True,
