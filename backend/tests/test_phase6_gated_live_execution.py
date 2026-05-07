@@ -66,6 +66,7 @@ class FakeDB:
     def __init__(self):
         self.bot_configs = FakeCollection()
         self.live_order_audits = FakeCollection()
+        self.live_approval_challenges = FakeCollection()
 
 
 class FakeLiveAdapter:
@@ -99,6 +100,7 @@ def gate_config(**overrides):
         "max_order_notional_usd": 25.0,
         "allowed_symbols": ("BTC-USD", "ETH-USD"),
         "manual_approval_required": True,
+        "signed_approval_required": False,
         "approval_token": "approve-me",
     }
     values.update(overrides)
@@ -161,6 +163,32 @@ def test_live_trading_gate_requires_approval_for_actual_order():
     assert blocked["allowed"] is False
     assert "approval" in blocked["reason"]
     assert allowed["allowed"] is True
+
+
+def test_live_trading_gate_signed_approval_mode_requires_token_presence():
+    gate = LiveTradingGateV2(gate_config(live_trading_enabled=True, execution_adapter="coinbase_exchange_v2", signed_approval_required=True))
+    blocked = gate.safe_preflight(
+        trading_mode="live-trading",
+        user_config={"live_trading_enabled": True},
+        symbol="BTC-USD",
+        side="BUY",
+        notional_usd=10.0,
+        approval_token=None,
+        dry_run=False,
+    )
+    token_present = gate.safe_preflight(
+        trading_mode="live-trading",
+        user_config={"live_trading_enabled": True},
+        symbol="BTC-USD",
+        side="BUY",
+        notional_usd=10.0,
+        approval_token="challenge.signature",
+        dry_run=False,
+    )
+
+    assert blocked["allowed"] is False
+    assert "signed live approval" in blocked["reason"]
+    assert token_present["allowed"] is True
 
 
 def test_live_trading_gate_rejects_excess_notional_and_unknown_symbol():
