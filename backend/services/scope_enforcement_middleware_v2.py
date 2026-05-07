@@ -10,11 +10,12 @@ from auth_core import verify_token
 from services.api_errors_v2 import error_envelope
 from services.authorization_v2 import Scope, effective_scopes, has_scope
 from services.live_approval_challenge_service_v2 import LiveApprovalChallengeError, LiveApprovalChallengeServiceV2
+from services.live_pre_submit_safety_service_v2 import LivePreSubmitSafetyServiceV2
 from services.request_context_v2 import get_request_id
 
 
 class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
-    """Central authorization choke point for live and privileged ops routes."""
+    """Central authorization and safety choke point for live and privileged ops routes."""
 
     def required_scope_for(self, method: str, path: str, body: Optional[dict]) -> Optional[str]:
         if path.startswith("/api/live-readonly/"):
@@ -114,6 +115,12 @@ class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
             return self.auth_error(403, "FORBIDDEN", str(exc))
         return None
 
+    async def verify_live_pre_submit_safety(self, user: dict) -> Optional[JSONResponse]:
+        result = await LivePreSubmitSafetyServiceV2(db).safe_check(user["id"])
+        if not result.get("allowed"):
+            return self.auth_error(409, "CONFLICT", str(result.get("reason", "live pre-submit safety check failed")))
+        return None
+
     async def dispatch(self, request: Request, call_next):
         parsed_body = None
         raw_body = b""
@@ -136,6 +143,9 @@ class ScopeEnforcementMiddlewareV2(BaseHTTPMiddleware):
             approval_error = await self.verify_live_approval(user, request.url.path, parsed_body or {})
             if approval_error:
                 return approval_error
+            safety_error = await self.verify_live_pre_submit_safety(user)
+            if safety_error:
+                return safety_error
 
         request.state.authorized_user = user
         return await call_next(request)
