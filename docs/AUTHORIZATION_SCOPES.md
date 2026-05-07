@@ -45,21 +45,26 @@ admin:roles
 admin:*
 ```
 
-## Live-trading path
+## Enforced route policy
 
-The intended route policy is:
+Route scope enforcement is centralized in `ScopeEnforcementMiddlewareV2`. It blocks privileged live/ops paths before handlers execute.
 
 | Route class | Required scope |
 |---|---|
-| live-readonly routes | `trading:live-preview` |
-| live-trading dry-run preview | `trading:live-preview` |
-| live-trading non-dry-run execution | `trading:live-execute` |
-| emergency halt | `ops:halt` |
-| index management | `ops:indexes` |
+| `/api/live-readonly/*` | `trading:live-preview` |
+| `/api/live-trading/gate` | `trading:live-preview` |
+| `/api/live-trading/audits` | `trading:live-preview` |
+| `/api/live-trading/market-buy` with `dry_run=true` | `trading:live-preview` |
+| `/api/live-trading/market-sell` with `dry_run=true` | `trading:live-preview` |
+| `/api/live-trading/market-buy` with `dry_run=false` | `trading:live-execute` |
+| `/api/live-trading/market-sell` with `dry_run=false` | `trading:live-execute` |
+| `/api/ops/readiness` | `ops:readiness` |
+| `/api/ops/indexes/ensure` | `ops:indexes` |
+| `/api/ops/emergency-halt` | `ops:halt` |
 
-## Current implementation note
+## Why middleware enforcement
 
-This PR establishes the reusable role/scope model and FastAPI dependencies. The follow-up PR should wire the dependencies onto live and ops routes in small targeted route patches.
+The live/ops paths require a single authorization choke point that is harder to bypass than scattered route-level checks. Middleware also allows dry-run vs. non-dry-run live requests to be differentiated before they reach execution handlers.
 
 ## Why this matters
 
