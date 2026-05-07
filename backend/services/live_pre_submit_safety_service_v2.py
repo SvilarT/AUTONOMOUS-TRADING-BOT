@@ -1,0 +1,102 @@
+import os
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from services.live_order_state_service_v2 import LiveOrderStateServiceV2
+
+
+class LivePreSubmitSafetyError(RuntimeError):
+    pass
+
+
+class LivePreSubmitSafetyServiceV2:
+    """Fail-closed pre-submit checks for non-dry-run live orders."""
+
+    def __init__(self, db):
+        self.db = db
+        self.orders = LiveOrderStateServiceV2(db)
+
+    @staticmethod
+    def utc_now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def env_bool(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def max_reconciliation_age_seconds() -> int:
+        try:
+            return int(os.getenv("LIVE_MAX_RECONCILIATION_AGE_SECONDS", "300"))
+        except ValueError:
+            return 300
+
+    async def halt_record(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return await self.db.live_halts.find_one(
+            {"$or": [{"scope": "global"}, {"scope": "user", "user_id": user_id}], "active": True},
+            {"_id": 0},
+            sort=[("created_at", -1)],
+        )
+
+    async def latest_reconciliation(self, user_id: str) -> Optional[Dict[str, Any]]:
+        return await self.db.live_readonly_reports.find_one({"user_id": user_id}, {"_id": 0}, sort=[("created_at", -1), ("snapshot.timestamp", -1)])
+
+    @staticmethod
+    def parse_timestamp(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    async def check(self, user_id: str) -> Dict[str, Any]:
+        checks = []
+
+        async def add(name: str, passed: bool, reason: str, metadata: Optional[Dict[str, Any]] = None):
+            checks.append({"name": name, "passed": passed, "reason": reason, "metadata": metadata or {}})
+            if not passed:
+                raise LivePreSubmitSafetyError(reason)
+
+        halt = await self.halt_record(user_id)
+        await add("no_active_halt", not bool(halt), "active live trading halt blocks order submission", {"halt": halt or {}})
+
+        unresolved = await self.orders.latest_unresolved_for_user(user_id)
+        await add("no_unresolved_live_order", not bool(unresolved), "unresolved live order blocks new live order submission", {"order": unresolved or {}})
+
+        require_fresh = self.env_bool("LIVE_REQUIRE_FRESH_RECONCILIATION", True)
+        if require_fresh:
+            report = await self.latest_reconciliation(user_id)
+            timestamp = None
+            if report:
+                timestamp = report.get("checked_at") or report.get("snapshot", {}).get("timestamp") or report.get("generated_at")
+            parsed = self.parse_timestamp(timestamp)
+            age = (self.utc_now() - parsed).total_seconds() if parsed else None
+            max_age = self.max_reconciliation_age_seconds()
+            await add(
+                "fresh_reconciliation",
+                bool(parsed and age is not None and age <= max_age),
+                "fresh live-readonly reconciliation required before non-dry-run live order",
+                {"age_seconds": age, "max_age_seconds": max_age},
+            )
+        else:
+            checks.append({"name": "fresh_reconciliation", "passed": True, "reason": "fresh reconciliation not required by config", "metadata": {}})
+
+        return {"allowed": True, "checks": checks}
+
+    async def safe_check(self, user_id: str) -> Dict[str, Any]:
+        try:
+            return await self.check(user_id)
+        except LivePreSubmitSafetyError as exc:
+            return {"allowed": False, "reason": str(exc)}
+
+    async def create_halt(self, *, user_id: Optional[str], scope: str, reason: str, created_by: str = "system") -> Dict[str, Any]:
+        record = {"scope": scope, "user_id": user_id, "reason": reason, "active": True, "created_by": created_by, "created_at": self.utc_now().isoformat()}
+        await self.db.live_halts.insert_one(record)
+        return record
