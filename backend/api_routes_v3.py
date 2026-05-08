@@ -210,6 +210,11 @@ async def get_worker_status(current_user: dict = Depends(get_current_user), limi
     return await WorkerHeartbeatServiceV2(db).list_workers(limit=limit)
 
 
+@api_router.post("/ops/workers/stale-alerts")
+async def emit_worker_stale_alerts(current_user: dict = Depends(require_ops_admin), limit: int = 100):
+    return await WorkerHeartbeatServiceV2(db).emit_stale_worker_alerts(limit=limit)
+
+
 @api_router.post("/ops/indexes/ensure")
 async def ensure_mongo_indexes(current_user: dict = Depends(require_ops_admin)):
     return await MongoIndexServiceV2(db).ensure_indexes()
