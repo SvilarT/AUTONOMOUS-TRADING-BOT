@@ -16,6 +16,7 @@ from services.mongo_indexes_v2 import MongoIndexServiceV2
 from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
 from services.trading_mode_v2 import TradingModeService
+from services.worker_heartbeat_service_v2 import WorkerHeartbeatServiceV2
 from app_state import db
 from runtime_config import DEBUG, OPS_ADMIN_EMAILS, OPS_ADMIN_ENABLED
 
@@ -103,14 +104,9 @@ async def get_alerts(current_user: dict = Depends(get_current_user), limit: int 
 @api_router.post("/backtests/run")
 async def run_backtest(request: BacktestRequest, current_user: dict = Depends(get_current_user)):
     try:
-        candles = await MarketDataService(db=db).get_candles(
-            request.symbol,
-            timeframe=request.timeframe,
-            periods=request.periods,
-        )
+        candles = await MarketDataService(db=db).get_candles(request.symbol, timeframe=request.timeframe, periods=request.periods)
     except (ValueError, MarketDataUnavailable) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
     result = BacktestingServiceV2().run_moving_average_backtest(candles, request.to_config())
     result["user_id"] = current_user["id"]
     result["symbol"] = request.symbol
@@ -121,20 +117,10 @@ async def run_backtest(request: BacktestRequest, current_user: dict = Depends(ge
 @api_router.post("/backtests/walk-forward")
 async def run_walk_forward(request: WalkForwardRequest, current_user: dict = Depends(get_current_user)):
     try:
-        candles = await MarketDataService(db=db).get_candles(
-            request.symbol,
-            timeframe=request.timeframe,
-            periods=request.periods,
-        )
+        candles = await MarketDataService(db=db).get_candles(request.symbol, timeframe=request.timeframe, periods=request.periods)
     except (ValueError, MarketDataUnavailable) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    result = BacktestingServiceV2().walk_forward_validation(
-        candles,
-        train_periods=request.train_periods,
-        test_periods=request.test_periods,
-        config=request.to_config(),
-    )
+    result = BacktestingServiceV2().walk_forward_validation(candles, train_periods=request.train_periods, test_periods=request.test_periods, config=request.to_config())
     result["user_id"] = current_user["id"]
     result["symbol"] = request.symbol
     result["timeframe"] = request.timeframe
@@ -196,13 +182,7 @@ async def get_live_trading_gate(current_user: dict = Depends(get_current_user)):
 @api_router.post("/live-trading/market-buy")
 async def live_market_buy(request: LiveMarketBuyRequest, current_user: dict = Depends(get_current_user)):
     try:
-        return await LiveTradingServiceV2(db).place_market_buy(
-            current_user["id"],
-            request.symbol,
-            request.notional_usd,
-            approval_token=request.approval_token,
-            dry_run=request.dry_run,
-        )
+        return await LiveTradingServiceV2(db).place_market_buy(current_user["id"], request.symbol, request.notional_usd, approval_token=request.approval_token, dry_run=request.dry_run)
     except CoinbaseLiveExecutionError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -210,14 +190,7 @@ async def live_market_buy(request: LiveMarketBuyRequest, current_user: dict = De
 @api_router.post("/live-trading/market-sell")
 async def live_market_sell(request: LiveMarketSellRequest, current_user: dict = Depends(get_current_user)):
     try:
-        return await LiveTradingServiceV2(db).place_market_sell(
-            current_user["id"],
-            request.symbol,
-            request.base_units,
-            reference_price=request.reference_price,
-            approval_token=request.approval_token,
-            dry_run=request.dry_run,
-        )
+        return await LiveTradingServiceV2(db).place_market_sell(current_user["id"], request.symbol, request.base_units, reference_price=request.reference_price, approval_token=request.approval_token, dry_run=request.dry_run)
     except CoinbaseLiveExecutionError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -232,6 +205,11 @@ async def get_operational_readiness(current_user: dict = Depends(get_current_use
     return await OperationalReadinessServiceV2().readiness(db, strict=strict)
 
 
+@api_router.get("/ops/workers")
+async def get_worker_status(current_user: dict = Depends(get_current_user), limit: int = 100):
+    return await WorkerHeartbeatServiceV2(db).list_workers(limit=limit)
+
+
 @api_router.post("/ops/indexes/ensure")
 async def ensure_mongo_indexes(current_user: dict = Depends(require_ops_admin)):
     return await MongoIndexServiceV2(db).ensure_indexes()
@@ -240,15 +218,6 @@ async def ensure_mongo_indexes(current_user: dict = Depends(require_ops_admin)):
 @api_router.post("/ops/emergency-halt")
 async def emergency_halt(request: EmergencyHaltRequest, current_user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc).isoformat()
-    result = await db.bot_configs.update_many(
-        {"user_id": current_user["id"]},
-        {"$set": {"is_active": False, "halt_reason": request.reason, "updated_at": now}},
-    )
-    await AlertService(db).emit(
-        current_user["id"],
-        "operator_emergency_halt",
-        "critical",
-        f"Emergency halt triggered: {request.reason}",
-        {"modified_count": getattr(result, "modified_count", None), "reason": request.reason},
-    )
+    result = await db.bot_configs.update_many({"user_id": current_user["id"]}, {"$set": {"is_active": False, "halt_reason": request.reason, "updated_at": now}})
+    await AlertService(db).emit(current_user["id"], "operator_emergency_halt", "critical", f"Emergency halt triggered: {request.reason}", {"modified_count": getattr(result, "modified_count", None), "reason": request.reason})
     return {"status": "halted", "reason": request.reason, "modified_count": getattr(result, "modified_count", None), "timestamp": now}
