@@ -1,25 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import axios from 'axios';
 import './App.css';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import { Toaster } from './components/ui/sonner';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-// Axios interceptor for auth token
-axios.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
+import { apiClient, API_BASE_URL } from './lib/apiClient';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -27,10 +12,9 @@ function App() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    // Check if user is authenticated
     const token = localStorage.getItem('token');
     const savedUser = localStorage.getItem('user');
-    
+
     if (token && savedUser) {
       setIsAuthenticated(true);
       setUser(JSON.parse(savedUser));
@@ -95,4 +79,5 @@ function App() {
 }
 
 export default App;
-export { API };
+export const API = API_BASE_URL;
+export { apiClient };
