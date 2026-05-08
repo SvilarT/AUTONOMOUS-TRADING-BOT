@@ -12,13 +12,9 @@ class CoinbaseLiveExecutionError(RuntimeError):
 class CoinbaseLiveExecutionAdapterV2(CoinbaseReadonlyAdapterV2):
     """Coinbase Exchange live execution adapter.
 
-    This class contains the actual POST /orders plumbing, but it should only be
-    reached through LiveTradingServiceV2 + LiveTradingGateV2. It supports dry-run
-    previews and market buy/sell payload generation.
-
-    P0 safety rule: the adapter has its own fail-closed kill switch in addition
-    to the service-level gate. This prevents future callers from bypassing the
-    gate and placing a real order accidentally.
+    This class contains POST /orders plumbing. It must be reached only through
+    LiveTradingServiceV2. The adapter retains its own fail-closed kill switch as
+    a final protection against accidental direct live submission.
     """
 
     adapter_name = "coinbase_exchange_v2"
@@ -45,11 +41,7 @@ class CoinbaseLiveExecutionAdapterV2(CoinbaseReadonlyAdapterV2):
         self.assert_credentials()
         body = json.dumps(payload, separators=(",", ":"))
         async with self.session_factory() as session:
-            async with session.post(
-                f"{self.base_url}{request_path}",
-                headers=self._headers("POST", request_path, body),
-                data=body,
-            ) as response:
+            async with session.post(f"{self.base_url}{request_path}", headers=self._headers("POST", request_path, body), data=body) as response:
                 data = await response.json()
                 if response.status not in {200, 201}:
                     raise CoinbaseLiveExecutionError(f"Coinbase live POST {request_path} returned HTTP {response.status}: {data}")
@@ -57,36 +49,41 @@ class CoinbaseLiveExecutionAdapterV2(CoinbaseReadonlyAdapterV2):
 
     @staticmethod
     def market_buy_payload(symbol: str, notional_usd: float, client_order_id: Optional[str] = None) -> Dict[str, Any]:
-        payload = {
-            "type": "market",
-            "side": "buy",
-            "product_id": symbol,
-            "funds": str(round(float(notional_usd), 2)),
-        }
+        payload = {"type": "market", "side": "buy", "product_id": symbol, "funds": str(round(float(notional_usd), 2))}
         if client_order_id:
             payload["client_oid"] = client_order_id
         return payload
 
     @staticmethod
     def market_sell_payload(symbol: str, base_units: float, client_order_id: Optional[str] = None) -> Dict[str, Any]:
-        payload = {
-            "type": "market",
-            "side": "sell",
-            "product_id": symbol,
-            "size": str(round(float(base_units), 12)),
-        }
+        payload = {"type": "market", "side": "sell", "product_id": symbol, "size": str(round(float(base_units), 12))}
         if client_order_id:
             payload["client_oid"] = client_order_id
         return payload
 
     @staticmethod
     def normalize_order_response(data: Dict[str, Any], *, symbol: str, side: str, requested: Dict[str, Any]) -> Dict[str, Any]:
-        status = data.get("status", "submitted")
+        raw_status = str(data.get("status", "submitted") or "submitted").lower()
+        status_map = {
+            "open": "acknowledged",
+            "pending": "acknowledged",
+            "active": "acknowledged",
+            "received": "acknowledged",
+            "done": "filled" if float(data.get("filled_size", 0.0) or 0.0) > 0 else "canceled",
+            "settled": "filled",
+            "filled": "filled",
+            "rejected": "rejected",
+            "failed": "failed",
+            "canceled": "canceled",
+            "cancelled": "canceled",
+        }
+        normalized_status = status_map.get(raw_status, raw_status or "submitted")
         return {
-            "success": status not in {"rejected", "failed"},
+            "success": normalized_status not in {"rejected", "failed", "canceled"},
             "order_id": data.get("id"),
             "client_order_id": data.get("client_oid") or requested.get("client_order_id"),
-            "status": status,
+            "status": normalized_status,
+            "broker_status": raw_status,
             "symbol": symbol,
             "side": side.upper(),
             "product_id": data.get("product_id", symbol),
@@ -102,58 +99,22 @@ class CoinbaseLiveExecutionAdapterV2(CoinbaseReadonlyAdapterV2):
             "requested": requested,
         }
 
-    async def place_market_buy(
-        self,
-        symbol: str,
-        notional_usd: float,
-        client_order_id: Optional[str] = None,
-        dry_run: bool = False,
-    ) -> Dict[str, Any]:
+    async def place_market_buy(self, symbol: str, notional_usd: float, client_order_id: Optional[str] = None, dry_run: bool = False) -> Dict[str, Any]:
         requested = {"symbol": symbol, "side": "BUY", "notional_usd": round(float(notional_usd), 8), "client_order_id": client_order_id}
         payload = self.market_buy_payload(symbol, notional_usd, client_order_id=client_order_id)
         if dry_run:
-            return {
-                "success": True,
-                "status": "dry_run",
-                "symbol": symbol,
-                "side": "BUY",
-                "order_id": None,
-                "client_order_id": client_order_id,
-                "simulation": False,
-                "live_execution": False,
-                "execution_adapter": self.adapter_name,
-                "requested": requested,
-                "coinbase_payload_preview": payload,
-            }
+            return {"success": True, "status": "dry_run", "broker_status": "dry_run", "symbol": symbol, "side": "BUY", "order_id": None, "client_order_id": client_order_id, "simulation": False, "live_execution": False, "execution_adapter": self.adapter_name, "requested": requested, "coinbase_payload_preview": payload}
         try:
             data = await self._post_private("/orders", payload)
         except CoinbaseReadonlyError as exc:
             raise CoinbaseLiveExecutionError(str(exc)) from exc
         return self.normalize_order_response(data, symbol=symbol, side="BUY", requested=requested)
 
-    async def place_market_sell(
-        self,
-        symbol: str,
-        base_units: float,
-        client_order_id: Optional[str] = None,
-        dry_run: bool = False,
-    ) -> Dict[str, Any]:
+    async def place_market_sell(self, symbol: str, base_units: float, client_order_id: Optional[str] = None, dry_run: bool = False) -> Dict[str, Any]:
         requested = {"symbol": symbol, "side": "SELL", "base_units": round(float(base_units), 12), "client_order_id": client_order_id}
         payload = self.market_sell_payload(symbol, base_units, client_order_id=client_order_id)
         if dry_run:
-            return {
-                "success": True,
-                "status": "dry_run",
-                "symbol": symbol,
-                "side": "SELL",
-                "order_id": None,
-                "client_order_id": client_order_id,
-                "simulation": False,
-                "live_execution": False,
-                "execution_adapter": self.adapter_name,
-                "requested": requested,
-                "coinbase_payload_preview": payload,
-            }
+            return {"success": True, "status": "dry_run", "broker_status": "dry_run", "symbol": symbol, "side": "SELL", "order_id": None, "client_order_id": client_order_id, "simulation": False, "live_execution": False, "execution_adapter": self.adapter_name, "requested": requested, "coinbase_payload_preview": payload}
         try:
             data = await self._post_private("/orders", payload)
         except CoinbaseReadonlyError as exc:
