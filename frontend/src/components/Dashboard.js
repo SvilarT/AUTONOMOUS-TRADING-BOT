@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { API } from '../App';
+import { apiClient } from '../App';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Switch } from './ui/switch';
@@ -45,11 +44,11 @@ const Dashboard = ({ user, onLogout }) => {
   const fetchDashboardData = async () => {
     try {
       const [statsRes, tradesRes, positionsRes, riskRes, configRes] = await Promise.all([
-        axios.get(`${API}/dashboard/stats`),
-        axios.get(`${API}/trades`),
-        axios.get(`${API}/positions`),
-        axios.get(`${API}/risk-metrics`),
-        axios.get(`${API}/bot-config`)
+        apiClient.get('/dashboard/stats'),
+        apiClient.get('/trades'),
+        apiClient.get('/positions'),
+        apiClient.get('/risk-metrics'),
+        apiClient.get('/bot-config')
       ]);
 
       setStats(statsRes.data);
@@ -59,8 +58,8 @@ const Dashboard = ({ user, onLogout }) => {
       setBotActive(configRes.data?.is_active || false);
 
       try {
-        const btcAnalysis = await axios.get(`${API}/market-analysis?symbol=BTC-USD`);
-        const ethAnalysis = await axios.get(`${API}/market-analysis?symbol=ETH-USD`);
+        const btcAnalysis = await apiClient.get('/market-analysis?symbol=BTC-USD');
+        const ethAnalysis = await apiClient.get('/market-analysis?symbol=ETH-USD');
         setMarketAnalysis({
           'BTC-USD': btcAnalysis.data,
           'ETH-USD': ethAnalysis.data
@@ -79,8 +78,8 @@ const Dashboard = ({ user, onLogout }) => {
 
   const toggleBot = async () => {
     try {
-      const endpoint = botActive ? `${API}/bot/stop` : `${API}/bot/start`;
-      await axios.post(endpoint);
+      const endpoint = botActive ? '/bot/stop' : '/bot/start';
+      await apiClient.post(endpoint);
       setBotActive(!botActive);
       toast.success(botActive ? 'Bot stopped' : 'Bot started');
       fetchDashboardData();
