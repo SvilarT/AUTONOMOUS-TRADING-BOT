@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle, Server } from 'lucide-react';
 import { Card } from './ui/card';
-import { getOperationalReadiness, getTradingMode, getWorkerStatus } from '../lib/apiClient';
+import { getLiveReadonlyStatus, getOperationalReadiness, getTradingMode, getWorkerStatus } from '../lib/apiClient';
 
 const StatusPill = ({ label, tone = 'neutral' }) => {
   const classes = {
@@ -17,21 +17,24 @@ const SystemStatusPanel = () => {
   const [mode, setMode] = useState(null);
   const [readiness, setReadiness] = useState(null);
   const [workers, setWorkers] = useState([]);
+  const [liveReadonly, setLiveReadonly] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       try {
-        const [modeData, readinessData, workerData] = await Promise.all([
+        const [modeData, readinessData, workerData, liveReadonlyData] = await Promise.all([
           getTradingMode(),
           getOperationalReadiness(false),
           getWorkerStatus(),
+          getLiveReadonlyStatus(),
         ]);
         if (!active) return;
         setMode(modeData);
         setReadiness(readinessData);
         setWorkers(workerData.workers || []);
+        setLiveReadonly(liveReadonlyData);
         setError(null);
       } catch (err) {
         if (!active) return;
@@ -49,6 +52,8 @@ const SystemStatusPanel = () => {
   const staleWorkers = workers.filter((worker) => worker.stale).length;
   const readinessOk = readiness?.status === 'ready' || readiness?.ready === true || readiness?.status === 'ok';
   const modeLabel = mode?.mode || mode?.trading_mode || 'unknown';
+  const liveReadonlyTone = liveReadonly?.fresh ? 'good' : liveReadonly?.status === 'missing' ? 'neutral' : 'warn';
+  const liveReadonlyLabel = liveReadonly?.status || 'unknown';
 
   return (
     <Card className="glass-card p-4 mb-6" data-testid="system-status-panel">
@@ -59,13 +64,14 @@ const SystemStatusPanel = () => {
             <h3 className="text-lg font-semibold">System Status</h3>
           </div>
           <p className="text-sm text-muted-foreground">
-            Paper-production visibility for trading mode, readiness, and worker health.
+            Visibility for trading mode, readiness, worker health, and live-readonly freshness.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill label={`Mode: ${modeLabel}`} tone={modeLabel === 'paper' ? 'good' : 'warn'} />
           <StatusPill label={`Readiness: ${readinessOk ? 'OK' : 'Check'}`} tone={readinessOk ? 'good' : 'warn'} />
           <StatusPill label={`Workers: ${workers.length}`} tone={staleWorkers > 0 ? 'warn' : 'good'} />
+          <StatusPill label={`Live readonly: ${liveReadonlyLabel}`} tone={liveReadonlyTone} />
           {error && <StatusPill label={`Status error: ${error.requestId || error.code}`} tone="bad" />}
         </div>
       </div>
