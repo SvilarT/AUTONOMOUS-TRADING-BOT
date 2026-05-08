@@ -150,6 +150,11 @@ async def get_live_readonly_snapshot(request: LiveReadonlySymbolsRequest, curren
         raise HTTPException(status_code=503, detail=str(exc))
 
 
+@api_router.get("/live-readonly/status")
+async def get_live_readonly_status(current_user: dict = Depends(get_current_user)):
+    return await LiveReadonlyServiceV2(db).latest_snapshot_status(current_user["id"])
+
+
 @api_router.post("/live-readonly/reconcile")
 async def reconcile_live_readonly(request: LiveReadonlySymbolsRequest, current_user: dict = Depends(get_current_user)):
     try:

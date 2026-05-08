@@ -88,3 +88,8 @@ export async function getWorkerStatus() {
   const response = await apiClient.get('/ops/workers');
   return response.data;
 }
+
+export async function getLiveReadonlyStatus() {
+  const response = await apiClient.get('/live-readonly/status');
+  return response.data;
+}

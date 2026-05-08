@@ -1,10 +1,11 @@
 import base64
 import hashlib
 import hmac
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from services.coinbase_readonly_adapter_v2 import CoinbaseReadonlyAdapterV2, CoinbaseReadonlyError
+from services.coinbase_readonly_adapter_v2 import CoinbaseReadonlyAdapterV2, CoinbaseReadonlyError, CoinbaseReadonlyErrorKind
 from services.live_readonly_service_v2 import LiveReadonlyServiceV2
 from services.trading_mode_v2 import TradingModeService, TradingModeError
 
@@ -71,6 +72,7 @@ class FakeDB:
     def __init__(self):
         self.alerts = FakeCollection()
         self.live_readonly_reports = FakeCollection()
+        self.live_readonly_snapshots = FakeCollection()
         self.ledger_entries = FakeCollection()
         self.positions_v2 = FakeCollection()
         self.portfolio_state = FakeCollection()
@@ -89,6 +91,9 @@ class FakeReadonlyAdapter:
             "orders_allowed": False,
             "live_execution_enabled": False,
             "credentials_configured": True,
+            "credential_alias": "coinbase_key_test",
+            "exchange": "coinbase_exchange",
+            "adapter_version": "fake_readonly_v2",
             "accounts": [
                 {"currency": "BTC", "balance": 1.0, "available": 1.0, "hold": 0.0},
                 {"currency": "USD", "balance": 100.0, "available": 100.0, "hold": 0.0},
@@ -106,7 +111,7 @@ class FakeReadonlyAdapter:
 
 class FailingReadonlyAdapter(FakeReadonlyAdapter):
     async def snapshot(self, symbols=None):
-        raise CoinbaseReadonlyError("readonly failure")
+        raise CoinbaseReadonlyError("readonly failure", kind=CoinbaseReadonlyErrorKind.EXCHANGE_UNAVAILABLE, status=503, retryable=True)
 
 
 def test_coinbase_readonly_adapter_credentials_detection_and_signing():
@@ -118,6 +123,7 @@ def test_coinbase_readonly_adapter_credentials_detection_and_signing():
 
     assert adapter.credentials_configured is True
     assert signature == expected
+    assert adapter.credential_alias().startswith("coinbase_key_")
 
 
 def test_coinbase_readonly_adapter_rejects_order_methods():
@@ -135,8 +141,27 @@ def test_coinbase_readonly_adapter_rejects_order_methods():
 def test_coinbase_readonly_adapter_requires_credentials_for_private_headers():
     adapter = CoinbaseReadonlyAdapterV2(api_key=None, api_secret=None, passphrase=None)
     assert adapter.credentials_configured is False
-    with pytest.raises(CoinbaseReadonlyError):
+    with pytest.raises(CoinbaseReadonlyError) as exc:
         adapter._headers("GET", "/accounts")
+    assert exc.value.kind == CoinbaseReadonlyErrorKind.CREDENTIALS.value
+
+
+def test_coinbase_readonly_http_error_taxonomy():
+    rate = CoinbaseReadonlyAdapterV2._classify_http_error(429, "/accounts")
+    outage = CoinbaseReadonlyAdapterV2._classify_http_error(503, "/accounts")
+    auth = CoinbaseReadonlyAdapterV2._classify_http_error(401, "/accounts")
+
+    assert rate.kind == CoinbaseReadonlyErrorKind.RATE_LIMIT.value
+    assert rate.retryable is True
+    assert outage.kind == CoinbaseReadonlyErrorKind.EXCHANGE_UNAVAILABLE.value
+    assert outage.retryable is True
+    assert auth.kind == CoinbaseReadonlyErrorKind.CREDENTIALS.value
+    assert auth.retryable is False
+
+
+def test_coinbase_readonly_error_serializes():
+    error = CoinbaseReadonlyError("boom", kind=CoinbaseReadonlyErrorKind.TIMEOUT, status=504, retryable=True)
+    assert error.to_dict() == {"message": "boom", "kind": "timeout", "status": 504, "retryable": True}
 
 
 def test_trading_mode_metadata_for_live_readonly_blocks_orders():
@@ -153,7 +178,7 @@ def test_trading_mode_metadata_for_live_readonly_blocks_orders():
 
 
 @pytest.mark.asyncio
-async def test_live_readonly_snapshot_includes_internal_positions_and_ledger_rebuild():
+async def test_live_readonly_snapshot_includes_internal_positions_ledger_and_persists_snapshot():
     db = FakeDB()
     await db.positions_v2.insert_one({"user_id": "user-1", "symbol": "BTC-USD", "base_units": 1.0, "notional_usd": 100.0})
     service = LiveReadonlyServiceV2(db, adapter=FakeReadonlyAdapter())
@@ -164,6 +189,31 @@ async def test_live_readonly_snapshot_includes_internal_positions_and_ledger_reb
     assert snapshot["orders_allowed"] is False
     assert snapshot["internal_positions"][0]["symbol"] == "BTC-USD"
     assert snapshot["ledger_rebuild"]["user_id"] == "user-1"
+    assert snapshot["snapshot_hash"]
+    assert snapshot["persisted_at"]
+    assert len(db.live_readonly_snapshots.docs) == 1
+    assert db.live_readonly_snapshots.docs[0]["credential_alias"] == "coinbase_key_test"
+
+
+@pytest.mark.asyncio
+async def test_live_readonly_latest_snapshot_status_missing_fresh_and_stale():
+    db = FakeDB()
+    service = LiveReadonlyServiceV2(db, adapter=FakeReadonlyAdapter())
+
+    missing = await service.latest_snapshot_status("user-1")
+    assert missing["status"] == "missing"
+    assert missing["fresh"] is False
+
+    await service.snapshot("user-1", symbols=["BTC-USD"])
+    fresh = await service.latest_snapshot_status("user-1")
+    assert fresh["status"] == "fresh"
+    assert fresh["fresh"] is True
+
+    stale_timestamp = (datetime.now(timezone.utc) - timedelta(seconds=1000)).isoformat()
+    await db.live_readonly_snapshots.update_one({"user_id": "user-1"}, {"$set": {"snapshot_timestamp": stale_timestamp, "created_at": stale_timestamp}})
+    stale = await service.latest_snapshot_status("user-1")
+    assert stale["status"] == "stale"
+    assert stale["fresh"] is False
 
 
 @pytest.mark.asyncio
@@ -176,7 +226,9 @@ async def test_live_readonly_reconcile_reports_ok_when_units_match():
 
     assert report["status"] == "ok"
     assert report["issues"] == []
+    assert report["snapshot_hash"]
     assert len(db.live_readonly_reports.docs) == 1
+    assert len(db.live_readonly_snapshots.docs) == 1
     assert len(db.alerts.docs) == 0
 
 
@@ -192,10 +244,11 @@ async def test_live_readonly_reconcile_detects_drift_and_alerts():
     assert report["issues"][0]["type"] == "exchange_internal_position_drift"
     assert report["issues"][0]["delta_units"] == 0.75
     assert db.alerts.docs[0]["type"] == "live_readonly_drift_detected"
+    assert db.alerts.docs[0]["context"]["snapshot_hash"]
 
 
 @pytest.mark.asyncio
-async def test_live_readonly_snapshot_failure_emits_alert():
+async def test_live_readonly_snapshot_failure_emits_alert_with_error_taxonomy():
     db = FakeDB()
     service = LiveReadonlyServiceV2(db, adapter=FailingReadonlyAdapter())
 
@@ -203,6 +256,8 @@ async def test_live_readonly_snapshot_failure_emits_alert():
         await service.snapshot("user-1", symbols=["BTC-USD"])
 
     assert db.alerts.docs[0]["type"] == "live_readonly_snapshot_failed"
+    assert db.alerts.docs[0]["context"]["error"]["kind"] == CoinbaseReadonlyErrorKind.EXCHANGE_UNAVAILABLE.value
+    assert db.alerts.docs[0]["context"]["error"]["retryable"] is True
 
 
 @pytest.mark.asyncio
@@ -215,5 +270,7 @@ async def test_live_readonly_orders_and_fills_are_readonly_payloads():
 
     assert orders["orders_allowed"] is False
     assert orders["orders"][0]["status"] == "done"
+    assert orders["checked_at"]
     assert fills["orders_allowed"] is False
     assert fills["fills"][0]["product_id"] == "BTC-USD"
+    assert fills["checked_at"]
