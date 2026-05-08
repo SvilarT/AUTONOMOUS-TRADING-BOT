@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { Switch } from './ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { toast } from 'sonner';
+import SystemStatusPanel from './SystemStatusPanel';
 import { 
   TrendingUp, 
   TrendingDown,
@@ -18,7 +19,6 @@ import {
   CheckCircle,
   Clock
 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const Dashboard = ({ user, onLogout }) => {
   const [stats, setStats] = useState(null);
@@ -31,9 +31,16 @@ const Dashboard = ({ user, onLogout }) => {
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000); // Update every 10s
+    const interval = setInterval(fetchDashboardData, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  const formatApiError = (error, fallback) => {
+    if (error?.requestId) {
+      return `${fallback} Request ID: ${error.requestId}`;
+    }
+    return error?.message || fallback;
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -51,7 +58,6 @@ const Dashboard = ({ user, onLogout }) => {
       setRiskMetrics(riskRes.data);
       setBotActive(configRes.data?.is_active || false);
 
-      // Fetch market analysis for each symbol
       try {
         const btcAnalysis = await axios.get(`${API}/market-analysis?symbol=BTC-USD`);
         const ethAnalysis = await axios.get(`${API}/market-analysis?symbol=ETH-USD`);
@@ -60,13 +66,13 @@ const Dashboard = ({ user, onLogout }) => {
           'ETH-USD': ethAnalysis.data
         });
       } catch (e) {
-        // Analysis not available yet
+        // Analysis not available yet.
       }
 
       setLoading(false);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
-      toast.error('Failed to load dashboard data');
+      toast.error(formatApiError(error, 'Failed to load dashboard data.'));
       setLoading(false);
     }
   };
@@ -79,7 +85,7 @@ const Dashboard = ({ user, onLogout }) => {
       toast.success(botActive ? 'Bot stopped' : 'Bot started');
       fetchDashboardData();
     } catch (error) {
-      toast.error('Failed to toggle bot');
+      toast.error(formatApiError(error, 'Failed to toggle bot.'));
     }
   };
 
@@ -96,7 +102,6 @@ const Dashboard = ({ user, onLogout }) => {
 
   return (
     <div className="min-h-screen p-4 md:p-6 lg:p-8 relative">
-      {/* Header */}
       <div className="max-w-7xl mx-auto mb-8">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div>
@@ -115,13 +120,14 @@ const Dashboard = ({ user, onLogout }) => {
           </div>
         </div>
 
-        {/* Bot Control */}
+        <SystemStatusPanel />
+
         <Card className="glass-card p-6 mb-6" data-testid="bot-control-card">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <h3 className="text-xl font-semibold mb-1">Autonomous Trading Bot</h3>
               <p className="text-sm text-muted-foreground">
-                AI-powered market analysis with GPT-5 | Capital protection enabled
+                Paper-first autonomous market analysis with capital protection enabled
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -131,7 +137,6 @@ const Dashboard = ({ user, onLogout }) => {
           </div>
         </Card>
 
-        {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <Card className="metric-card" data-testid="total-equity-card">
             <div className="flex justify-between items-start mb-4">
@@ -142,11 +147,7 @@ const Dashboard = ({ user, onLogout }) => {
               <DollarSign className="w-8 h-8 text-primary opacity-50" />
             </div>
             <div className="flex items-center gap-2 text-sm">
-              {stats?.daily_pnl >= 0 ? (
-                <TrendingUp className="w-4 h-4 text-green-500" />
-              ) : (
-                <TrendingDown className="w-4 h-4 text-red-500" />
-              )}
+              {stats?.daily_pnl >= 0 ? <TrendingUp className="w-4 h-4 text-green-500" /> : <TrendingDown className="w-4 h-4 text-red-500" />}
               <span className={stats?.daily_pnl >= 0 ? 'text-green-500' : 'text-red-500'}>
                 ${Math.abs(stats?.daily_pnl || 0).toFixed(2)} today
               </span>
@@ -181,17 +182,12 @@ const Dashboard = ({ user, onLogout }) => {
                 <p className="text-sm text-muted-foreground mb-1">Current Drawdown</p>
                 <h3 className="text-2xl font-bold">{(stats?.current_drawdown || 0).toFixed(2)}%</h3>
               </div>
-              {stats?.current_drawdown > 2 ? (
-                <AlertTriangle className="w-8 h-8 text-yellow-400 opacity-50" />
-              ) : (
-                <CheckCircle className="w-8 h-8 text-green-500 opacity-50" />
-              )}
+              {stats?.current_drawdown > 2 ? <AlertTriangle className="w-8 h-8 text-yellow-400 opacity-50" /> : <CheckCircle className="w-8 h-8 text-green-500 opacity-50" />}
             </div>
             <p className="text-sm text-muted-foreground">Risk threshold: 3%</p>
           </Card>
         </div>
 
-        {/* Main Content Tabs */}
         <Tabs defaultValue="overview" className="space-y-4">
           <TabsList className="glass-card">
             <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
@@ -201,30 +197,16 @@ const Dashboard = ({ user, onLogout }) => {
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
-            {/* Risk Metrics */}
             <Card className="glass-card p-6" data-testid="risk-metrics-card">
               <h3 className="text-xl font-semibold mb-4">Risk Metrics</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Max Equity</p>
-                  <p className="text-lg font-semibold">${riskMetrics?.max_equity?.toLocaleString() || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Equity Floor</p>
-                  <p className="text-lg font-semibold">${riskMetrics?.equity_floor?.toLocaleString() || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Cash Balance</p>
-                  <p className="text-lg font-semibold">${riskMetrics?.cash_balance?.toLocaleString() || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Positions Value</p>
-                  <p className="text-lg font-semibold">${riskMetrics?.positions_value?.toLocaleString() || '0'}</p>
-                </div>
+                <div><p className="text-sm text-muted-foreground mb-1">Max Equity</p><p className="text-lg font-semibold">${riskMetrics?.max_equity?.toLocaleString() || '0'}</p></div>
+                <div><p className="text-sm text-muted-foreground mb-1">Equity Floor</p><p className="text-lg font-semibold">${riskMetrics?.equity_floor?.toLocaleString() || '0'}</p></div>
+                <div><p className="text-sm text-muted-foreground mb-1">Cash Balance</p><p className="text-lg font-semibold">${riskMetrics?.cash_balance?.toLocaleString() || '0'}</p></div>
+                <div><p className="text-sm text-muted-foreground mb-1">Positions Value</p><p className="text-lg font-semibold">${riskMetrics?.positions_value?.toLocaleString() || '0'}</p></div>
               </div>
             </Card>
 
-            {/* Recent Activity */}
             <Card className="glass-card p-6" data-testid="recent-trades-card">
               <h3 className="text-xl font-semibold mb-4">Recent Trades</h3>
               <div className="space-y-2 max-h-96 overflow-y-auto scrollbar-thin">
@@ -233,22 +215,16 @@ const Dashboard = ({ user, onLogout }) => {
                     <div className="flex justify-between items-center">
                       <div>
                         <p className="font-medium">{trade.symbol}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {trade.side} • {trade.status}
-                        </p>
+                        <p className="text-sm text-muted-foreground">{trade.side} • {trade.status}</p>
                       </div>
                       <div className="text-right">
                         <p className="font-medium">${trade.quantity?.toFixed(2)}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {trade.filled_price ? `@$${trade.filled_price}` : 'Pending'}
-                        </p>
+                        <p className="text-sm text-muted-foreground">{trade.filled_price ? `@$${trade.filled_price}` : 'Pending'}</p>
                       </div>
                     </div>
                   </div>
                 ))}
-                {trades.length === 0 && (
-                  <p className="text-center text-muted-foreground py-8">No trades yet. Start the bot to begin trading.</p>
-                )}
+                {trades.length === 0 && <p className="text-center text-muted-foreground py-8">No trades yet. Start the bot to begin trading.</p>}
               </div>
             </Card>
           </TabsContent>
@@ -271,33 +247,17 @@ const Dashboard = ({ user, onLogout }) => {
                   <tbody>
                     {trades.map((trade, idx) => (
                       <tr key={idx} className="border-b border-border hover:bg-muted/5">
-                        <td className="py-3 px-4 text-sm">
-                          {new Date(trade.created_at).toLocaleString()}
-                        </td>
+                        <td className="py-3 px-4 text-sm">{new Date(trade.created_at).toLocaleString()}</td>
                         <td className="py-3 px-4 font-medium">{trade.symbol}</td>
-                        <td className="py-3 px-4">
-                          <span className={`text-sm font-medium ${trade.side === 'BUY' ? 'text-green-500' : 'text-red-500'}`}>
-                            {trade.side}
-                          </span>
-                        </td>
+                        <td className="py-3 px-4"><span className={`text-sm font-medium ${trade.side === 'BUY' ? 'text-green-500' : 'text-red-500'}`}>{trade.side}</span></td>
                         <td className="py-3 px-4 text-right">${trade.quantity?.toFixed(2)}</td>
-                        <td className="py-3 px-4 text-right">
-                          {trade.filled_price ? `$${trade.filled_price}` : '-'}
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className={`text-xs px-2 py-1 rounded-full ${
-                            trade.status === 'filled' ? 'bg-green-500/20 text-green-500' : 'bg-yellow-500/20 text-yellow-500'
-                          }`}>
-                            {trade.status}
-                          </span>
-                        </td>
+                        <td className="py-3 px-4 text-right">{trade.filled_price ? `$${trade.filled_price}` : '-'}</td>
+                        <td className="py-3 px-4"><span className={`text-xs px-2 py-1 rounded-full ${trade.status === 'filled' ? 'bg-green-500/20 text-green-500' : 'bg-yellow-500/20 text-yellow-500'}`}>{trade.status}</span></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {trades.length === 0 && (
-                  <p className="text-center text-muted-foreground py-12">No trades executed yet</p>
-                )}
+                {trades.length === 0 && <p className="text-center text-muted-foreground py-12">No trades executed yet</p>}
               </div>
             </Card>
           </TabsContent>
@@ -310,25 +270,13 @@ const Dashboard = ({ user, onLogout }) => {
                   {positions.map((position, idx) => (
                     <div key={idx} className="p-4 rounded-lg border border-border">
                       <div className="flex justify-between items-center">
-                        <div>
-                          <h4 className="font-semibold text-lg">{position.symbol}</h4>
-                          <p className="text-sm text-muted-foreground">Qty: {position.quantity}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-medium">Avg: ${position.avg_price}</p>
-                          <p className={`text-sm ${
-                            position.pnl >= 0 ? 'text-green-500' : 'text-red-500'
-                          }`}>
-                            {position.pnl >= 0 ? '+' : ''}{position.pnl_percent?.toFixed(2)}%
-                          </p>
-                        </div>
+                        <div><h4 className="font-semibold text-lg">{position.symbol}</h4><p className="text-sm text-muted-foreground">Qty: {position.quantity}</p></div>
+                        <div className="text-right"><p className="font-medium">Avg: ${position.avg_price}</p><p className={`text-sm ${position.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>{position.pnl >= 0 ? '+' : ''}{position.pnl_percent?.toFixed(2)}%</p></div>
                       </div>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p className="text-center text-muted-foreground py-12">No open positions</p>
-              )}
+              ) : <p className="text-center text-muted-foreground py-12">No open positions</p>}
             </Card>
           </TabsContent>
 
@@ -340,56 +288,17 @@ const Dashboard = ({ user, onLogout }) => {
                   <Card key={symbol} className="glass-card p-6" data-testid={`analysis-${symbol}`}>
                     <div className="flex items-start gap-4 mb-4">
                       <Brain className="w-8 h-8 text-primary" />
-                      <div className="flex-1">
-                        <h3 className="text-xl font-semibold mb-1">{symbol} Analysis</h3>
-                        <p className="text-sm text-muted-foreground">GPT-5 Market Intelligence</p>
-                      </div>
-                      {analysis && (
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          analysis.buy_recommendation 
-                            ? 'bg-green-500/20 text-green-500' 
-                            : 'bg-gray-500/20 text-gray-400'
-                        }`}>
-                          {analysis.signal || 'HOLD'}
-                        </span>
-                      )}
+                      <div className="flex-1"><h3 className="text-xl font-semibold mb-1">{symbol} Analysis</h3><p className="text-sm text-muted-foreground">Market Intelligence</p></div>
+                      {analysis && <span className={`px-3 py-1 rounded-full text-xs font-medium ${analysis.buy_recommendation ? 'bg-green-500/20 text-green-500' : 'bg-gray-500/20 text-gray-400'}`}>{analysis.signal || 'HOLD'}</span>}
                     </div>
-
                     {analysis ? (
                       <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <p className="text-sm text-muted-foreground mb-1">Regime</p>
-                            <p className="font-medium capitalize">{analysis.regime}</p>
-                          </div>
-                          <div>
-                            <p className="text-sm text-muted-foreground mb-1">Confidence</p>
-                            <p className="font-medium">{analysis.confidence}%</p>
-                          </div>
-                        </div>
-                        
-                        <div>
-                          <p className="text-sm text-muted-foreground mb-2">AI Analysis:</p>
-                          <p className="text-sm leading-relaxed">{analysis.ai_analysis}</p>
-                        </div>
-
-                        {analysis.risks && (
-                          <div>
-                            <p className="text-sm text-muted-foreground mb-2">Risk Factors:</p>
-                            <p className="text-sm leading-relaxed text-yellow-500">{analysis.risks}</p>
-                          </div>
-                        )}
-
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Clock className="w-4 h-4" />
-                          <span>{new Date(analysis.timestamp).toLocaleString()}</span>
-                        </div>
+                        <div className="grid grid-cols-2 gap-4"><div><p className="text-sm text-muted-foreground mb-1">Regime</p><p className="font-medium capitalize">{analysis.regime}</p></div><div><p className="text-sm text-muted-foreground mb-1">Confidence</p><p className="font-medium">{analysis.confidence}%</p></div></div>
+                        <div><p className="text-sm text-muted-foreground mb-2">Analysis:</p><p className="text-sm leading-relaxed">{analysis.ai_analysis}</p></div>
+                        {analysis.risks && <div><p className="text-sm text-muted-foreground mb-2">Risk Factors:</p><p className="text-sm leading-relaxed text-yellow-500">{analysis.risks}</p></div>}
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="w-4 h-4" /><span>{new Date(analysis.timestamp).toLocaleString()}</span></div>
                       </div>
-                    ) : (
-                      <p className="text-center text-muted-foreground py-8">
-                        No analysis available yet. Start the bot to begin analysis.
-                      </p>
-                    )}
+                    ) : <p className="text-center text-muted-foreground py-8">No analysis available yet. Start the bot to begin analysis.</p>}
                   </Card>
                 );
               })}
