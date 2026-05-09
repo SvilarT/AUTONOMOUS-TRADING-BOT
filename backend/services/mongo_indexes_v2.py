@@ -35,6 +35,8 @@ class MongoIndexServiceV2:
         await create(self.db.live_order_transitions, [("order_id", 1), ("sequence", 1)], unique=True, name="uniq_live_order_transition_sequence")
         await create(self.db.live_order_transitions, [("user_id", 1), ("is_latest", 1), ("state", 1), ("created_at", -1)], name="live_order_latest_user_state")
         await create(self.db.live_order_transitions, [("transition_hash", 1)], unique=True, sparse=True, name="uniq_live_order_transition_hash")
+        await create(self.db.live_post_submit_reconciliation_requirements, [("user_id", 1), ("status", 1), ("created_at", -1)], name="live_post_submit_reconciliation_user_status")
+        await create(self.db.live_post_submit_reconciliation_requirements, [("live_order_id", 1)], unique=True, sparse=True, name="uniq_live_post_submit_reconciliation_order")
         await create(self.db.live_halts, [("scope", 1), ("user_id", 1), ("active", 1), ("created_at", -1)], name="live_halts_scope_user_active")
         await create(self.db.worker_heartbeats, [("worker_id", 1)], unique=True, name="uniq_worker_heartbeat")
         await create(self.db.worker_heartbeats, [("updated_at", -1)], name="worker_heartbeats_updated")
