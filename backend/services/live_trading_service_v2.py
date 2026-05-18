@@ -1,26 +1,45 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from services.coinbase_live_execution_adapter_v2 import CoinbaseLiveExecutionAdapterV2, CoinbaseLiveExecutionError
+from services.coinbase_live_execution_adapter_v2 import (
+    CoinbaseLiveExecutionAdapterV2,
+    CoinbaseLiveExecutionError,
+)
 from services.execution_service_v2 import ExecutionServiceV2
+from services.live_manual_order_lifecycle_service_v2 import (
+    LiveManualOrderLifecycleServiceV2,
+)
 from services.live_order_audit_service_v2 import LiveOrderAuditServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateV2
 from services.trading_mode_v2 import TradingModeService
 
 
 class LiveTradingServiceV2:
-    """Gated live execution orchestration.
+    """Gated manual live execution orchestration.
 
-    This service is the only intended entrypoint for live orders. It performs a
-    gate preflight, writes a hash-chained audit record, supports dry-run
-    previews, and only then delegates to the live adapter.
+    This service is the manual live order entrypoint. It keeps the existing live
+    gate and adapter boundaries, while wiring in:
+
+    - live order lifecycle state transitions;
+    - persisted live risk decisions;
+    - pre-submit safety checks;
+    - post-submit reconciliation requirements;
+    - hash-chained live audit records.
+
+    It does not enable autonomous live trading.
     """
 
-    def __init__(self, db, adapter: Optional[CoinbaseLiveExecutionAdapterV2] = None, gate: Optional[LiveTradingGateV2] = None):
+    def __init__(
+        self,
+        db,
+        adapter: Optional[CoinbaseLiveExecutionAdapterV2] = None,
+        gate: Optional[LiveTradingGateV2] = None,
+    ):
         self.db = db
         self.adapter = adapter or CoinbaseLiveExecutionAdapterV2()
         self.gate = gate or LiveTradingGateV2()
         self.audits = LiveOrderAuditServiceV2(db)
+        self.lifecycle = LiveManualOrderLifecycleServiceV2(db)
 
     @staticmethod
     def utc_now() -> str:
@@ -32,8 +51,18 @@ class LiveTradingServiceV2:
     async def _audit(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return await self.audits.append(record)
 
-    async def preview_market_buy(self, user_id: str, symbol: str, notional_usd: float) -> Dict[str, Any]:
-        return await self.place_market_buy(user_id, symbol, notional_usd, dry_run=True)
+    async def preview_market_buy(
+        self,
+        user_id: str,
+        symbol: str,
+        notional_usd: float,
+    ) -> Dict[str, Any]:
+        return await self.place_market_buy(
+            user_id=user_id,
+            symbol=symbol,
+            notional_usd=notional_usd,
+            dry_run=True,
+        )
 
     async def place_market_buy(
         self,
@@ -43,43 +72,31 @@ class LiveTradingServiceV2:
         approval_token: Optional[str] = None,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        user_config = await self._user_config(user_id)
-        mode = TradingModeService().mode.value
-        client_order_id = ExecutionServiceV2.build_client_order_id("live_buy", symbol, f"{user_id}:{symbol}:BUY:{self.utc_now()}")
-        gate = self.gate.safe_preflight(
-            trading_mode=mode,
-            user_config=user_config,
+        return await self._place_manual_order(
+            user_id=user_id,
             symbol=symbol,
             side="BUY",
-            notional_usd=notional_usd,
+            notional_usd=float(notional_usd),
+            base_units=None,
+            reference_price=None,
             approval_token=approval_token,
             dry_run=dry_run,
         )
-        audit = await self._audit(
-            {
-                "user_id": user_id,
-                "symbol": symbol,
-                "side": "BUY",
-                "notional_usd": round(float(notional_usd), 8),
-                "client_order_id": client_order_id,
-                "dry_run": dry_run,
-                "gate": gate,
-                "status": "blocked" if not gate.get("allowed") else "preflight_passed",
-            }
+
+    async def preview_market_sell(
+        self,
+        user_id: str,
+        symbol: str,
+        base_units: float,
+        reference_price: float,
+    ) -> Dict[str, Any]:
+        return await self.place_market_sell(
+            user_id=user_id,
+            symbol=symbol,
+            base_units=base_units,
+            reference_price=reference_price,
+            dry_run=True,
         )
-        if not gate.get("allowed"):
-            return {"success": False, "status": "blocked", "audit": audit, "gate": gate}
-
-        try:
-            order = await self.adapter.place_market_buy(symbol, notional_usd, client_order_id=client_order_id, dry_run=dry_run)
-        except CoinbaseLiveExecutionError as exc:
-            await self._audit({**audit, "status": "adapter_error", "error": str(exc)})
-            raise
-        await self._audit({**audit, "status": order.get("status"), "order": order})
-        return {"success": bool(order.get("success")), "status": order.get("status"), "order": order, "audit": audit, "gate": gate}
-
-    async def preview_market_sell(self, user_id: str, symbol: str, base_units: float, reference_price: float) -> Dict[str, Any]:
-        return await self.place_market_sell(user_id, symbol, base_units, reference_price=reference_price, dry_run=True)
 
     async def place_market_sell(
         self,
@@ -90,45 +107,195 @@ class LiveTradingServiceV2:
         approval_token: Optional[str] = None,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        notional_estimate = float(base_units) * float(reference_price)
+        notional_usd = float(base_units) * float(reference_price)
+        return await self._place_manual_order(
+            user_id=user_id,
+            symbol=symbol,
+            side="SELL",
+            notional_usd=notional_usd,
+            base_units=float(base_units),
+            reference_price=float(reference_price),
+            approval_token=approval_token,
+            dry_run=dry_run,
+        )
+
+    async def _place_manual_order(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        side: str,
+        notional_usd: float,
+        base_units: Optional[float],
+        reference_price: Optional[float],
+        approval_token: Optional[str],
+        dry_run: bool,
+    ) -> Dict[str, Any]:
         user_config = await self._user_config(user_id)
         mode = TradingModeService().mode.value
-        client_order_id = ExecutionServiceV2.build_client_order_id("live_sell", symbol, f"{user_id}:{symbol}:SELL:{self.utc_now()}")
+
+        client_order_id = ExecutionServiceV2.build_client_order_id(
+            f"manual_{side.lower()}",
+            symbol,
+            f"{user_id}:{symbol}:{side}:{self.utc_now()}",
+        )
+
+        lifecycle_order = await self.lifecycle.begin(
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            notional_usd=notional_usd,
+            base_units=base_units,
+            client_order_id=client_order_id,
+        )
+        live_order_id = lifecycle_order["order_id"]
+
         gate = self.gate.safe_preflight(
             trading_mode=mode,
             user_config=user_config,
             symbol=symbol,
-            side="SELL",
-            notional_usd=notional_estimate,
+            side=side,
+            notional_usd=notional_usd,
             approval_token=approval_token,
             dry_run=dry_run,
         )
+        await self.lifecycle.gate_checked(live_order_id, gate)
+
+        risk_decision = await self.lifecycle.risk_checked(
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            notional_usd=notional_usd,
+            user_config=user_config,
+            live_order_id=live_order_id,
+            dry_run=dry_run,
+        )
+
         audit = await self._audit(
             {
                 "user_id": user_id,
                 "symbol": symbol,
-                "side": "SELL",
-                "base_units": round(float(base_units), 12),
-                "notional_usd": round(notional_estimate, 8),
+                "side": side,
+                "notional_usd": round(float(notional_usd), 8),
+                "base_units": round(float(base_units), 12) if base_units is not None else None,
+                "reference_price": reference_price,
                 "client_order_id": client_order_id,
+                "live_order_id": live_order_id,
                 "dry_run": dry_run,
                 "gate": gate,
-                "status": "blocked" if not gate.get("allowed") else "preflight_passed",
+                "risk_decision": risk_decision,
+                "status": (
+                    "preflight_passed"
+                    if gate.get("allowed") and risk_decision.get("decision") == "allow"
+                    else "blocked"
+                ),
             }
         )
-        if not gate.get("allowed"):
-            return {"success": False, "status": "blocked", "audit": audit, "gate": gate}
+
+        if not gate.get("allowed") or risk_decision.get("decision") != "allow":
+            await self.lifecycle.blocked(
+                live_order_id,
+                "manual live order blocked by gate or risk",
+                {"gate": gate, "risk_decision": risk_decision},
+            )
+            return {
+                "success": False,
+                "status": "blocked",
+                "live_order_id": live_order_id,
+                "audit": audit,
+                "gate": gate,
+                "risk_decision": risk_decision,
+            }
+
+        await self.lifecycle.approval_recorded(
+            live_order_id=live_order_id,
+            dry_run=dry_run,
+            approval_token=approval_token,
+        )
+
+        pre_submit = await self.lifecycle.pre_submit_checked(
+            user_id=user_id,
+            live_order_id=live_order_id,
+            dry_run=dry_run,
+        )
+        if not pre_submit.get("allowed"):
+            await self._audit(
+                {
+                    **audit,
+                    "status": "pre_submit_blocked",
+                    "pre_submit": pre_submit,
+                }
+            )
+            return {
+                "success": False,
+                "status": "pre_submit_blocked",
+                "live_order_id": live_order_id,
+                "audit": audit,
+                "gate": gate,
+                "risk_decision": risk_decision,
+                "pre_submit": pre_submit,
+            }
 
         try:
-            order = await self.adapter.place_market_sell(symbol, base_units, client_order_id=client_order_id, dry_run=dry_run)
+            if side == "BUY":
+                order = await self.adapter.place_market_buy(
+                    symbol,
+                    notional_usd,
+                    client_order_id=client_order_id,
+                    dry_run=dry_run,
+                )
+            else:
+                order = await self.adapter.place_market_sell(
+                    symbol,
+                    float(base_units or 0.0),
+                    client_order_id=client_order_id,
+                    dry_run=dry_run,
+                )
         except CoinbaseLiveExecutionError as exc:
-            await self._audit({**audit, "status": "adapter_error", "error": str(exc)})
+            await self.lifecycle.adapter_error(live_order_id, str(exc))
+            await self._audit(
+                {
+                    **audit,
+                    "status": "adapter_error",
+                    "error": str(exc),
+                }
+            )
             raise
-        await self._audit({**audit, "status": order.get("status"), "order": order})
-        return {"success": bool(order.get("success")), "status": order.get("status"), "order": order, "audit": audit, "gate": gate}
+
+        await self.lifecycle.submitted(live_order_id, order, dry_run)
+
+        reconciliation_requirement = await self.lifecycle.finalized_from_order(
+            user_id=user_id,
+            live_order_id=live_order_id,
+            order=order,
+            dry_run=dry_run,
+        )
+
+        await self._audit(
+            {
+                **audit,
+                "status": order.get("status"),
+                "order": order,
+                "reconciliation_requirement": reconciliation_requirement,
+            }
+        )
+
+        return {
+            "success": bool(order.get("success")),
+            "status": order.get("status"),
+            "live_order_id": live_order_id,
+            "order": order,
+            "audit": audit,
+            "gate": gate,
+            "risk_decision": risk_decision,
+            "reconciliation_requirement": reconciliation_requirement,
+        }
 
     async def list_audits(self, user_id: str, limit: int = 100):
-        return await self.db.live_order_audits.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+        return await self.db.live_order_audits.find(
+            {"user_id": user_id},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(limit).to_list(limit)
 
     async def verify_audit_chain(self, user_id: str, limit: int = 1000):
         return await self.audits.verify_user_chain(user_id, limit=limit)
