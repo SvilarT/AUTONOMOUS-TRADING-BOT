@@ -13,6 +13,7 @@ from services.live_readonly_service_v2 import LiveReadonlyServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateV2
 from services.live_trading_service_v2 import LiveTradingServiceV2
 from services.manual_live_pilot_readiness_service_v2 import ManualLivePilotReadinessServiceV2
+from services.manual_live_pilot_workflow_service_v2 import ManualLivePilotWorkflowServiceV2
 from services.mongo_indexes_v2 import MongoIndexServiceV2
 from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
@@ -77,6 +78,16 @@ class LiveMarketSellRequest(BaseModel):
     reference_price: float = Field(gt=0)
     approval_token: str | None = None
     dry_run: bool = True
+
+
+class PilotReconciliationResolutionRequest(BaseModel):
+    live_order_id: str
+    resolution: str = Field(default="verified_after_live_readonly_reconciliation")
+    notes: str | None = None
+
+
+class PilotReportRequest(BaseModel):
+    live_order_id: str
 
 
 class EmergencyHaltRequest(BaseModel):
@@ -188,6 +199,26 @@ async def get_live_trading_gate(current_user: dict = Depends(get_current_user)):
 @api_router.get("/live-trading/pilot-readiness")
 async def get_manual_live_pilot_readiness(current_user: dict = Depends(get_current_user)):
     return await ManualLivePilotReadinessServiceV2(db).checklist(current_user["id"])
+
+
+@api_router.get("/live-trading/pilot/pending-reconciliation")
+async def get_manual_live_pilot_pending_reconciliation(current_user: dict = Depends(get_current_user), limit: int = 100):
+    return await ManualLivePilotWorkflowServiceV2(db).pending_reconciliation_requirements(current_user["id"], limit=limit)
+
+
+@api_router.post("/live-trading/pilot/resolve-reconciliation")
+async def resolve_manual_live_pilot_reconciliation(request: PilotReconciliationResolutionRequest, current_user: dict = Depends(get_current_user)):
+    return await ManualLivePilotWorkflowServiceV2(db).resolve_reconciliation_requirement(user_id=current_user["id"], live_order_id=request.live_order_id, resolution=request.resolution, notes=request.notes)
+
+
+@api_router.post("/live-trading/pilot/report")
+async def build_manual_live_pilot_report(request: PilotReportRequest, current_user: dict = Depends(get_current_user)):
+    return await ManualLivePilotWorkflowServiceV2(db).build_pilot_report(current_user["id"], request.live_order_id)
+
+
+@api_router.get("/live-trading/pilot/reports")
+async def list_manual_live_pilot_reports(current_user: dict = Depends(get_current_user), limit: int = 100):
+    return await ManualLivePilotWorkflowServiceV2(db).list_pilot_reports(current_user["id"], limit=limit)
 
 
 @api_router.post("/live-trading/market-buy")
