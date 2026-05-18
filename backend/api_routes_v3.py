@@ -12,6 +12,7 @@ from services.ledger_service_v2 import LedgerServiceV2
 from services.live_readonly_service_v2 import LiveReadonlyServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateV2
 from services.live_trading_service_v2 import LiveTradingServiceV2
+from services.manual_live_pilot_readiness_service_v2 import ManualLivePilotReadinessServiceV2
 from services.mongo_indexes_v2 import MongoIndexServiceV2
 from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.market_data_service import MarketDataService, MarketDataUnavailable
@@ -182,6 +183,11 @@ async def get_live_readonly_fills(current_user: dict = Depends(get_current_user)
 @api_router.get("/live-trading/gate")
 async def get_live_trading_gate(current_user: dict = Depends(get_current_user)):
     return LiveTradingGateV2().describe()
+
+
+@api_router.get("/live-trading/pilot-readiness")
+async def get_manual_live_pilot_readiness(current_user: dict = Depends(get_current_user)):
+    return await ManualLivePilotReadinessServiceV2(db).checklist(current_user["id"])
 
 
 @api_router.post("/live-trading/market-buy")
