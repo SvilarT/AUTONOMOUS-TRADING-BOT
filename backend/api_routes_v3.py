@@ -13,6 +13,7 @@ from services.live_readonly_service_v2 import LiveReadonlyServiceV2
 from services.live_trading_gate_v2 import LiveTradingGateV2
 from services.live_trading_service_v2 import LiveTradingServiceV2
 from services.manual_live_pilot_readiness_service_v2 import ManualLivePilotReadinessServiceV2
+from services.manual_live_pilot_review_service_v2 import ManualLivePilotReviewServiceV2
 from services.manual_live_pilot_workflow_service_v2 import ManualLivePilotWorkflowServiceV2
 from services.mongo_indexes_v2 import MongoIndexServiceV2
 from services.operational_readiness_v2 import OperationalReadinessServiceV2
@@ -31,8 +32,8 @@ class BacktestRequest(BaseModel):
     fee_bps: float = Field(default=10.0, ge=0)
     slippage_bps: float = Field(default=5.0, ge=0)
     max_position_pct: float = Field(default=0.30, gt=0, le=1.0)
-    max_drawdown_pct: float = Field(default=0.10, gt=0, le=1.0)
-    max_daily_loss_pct: float = Field(default=0.05, gt=0, le=1.0)
+    max_drawdown_pct: float = Field(default=0.10, ge=0, le=1.0)
+    max_daily_loss_pct: float = Field(default=0.05, ge=0, le=1.0)
     fast_window: int = Field(default=10, ge=2, le=100)
     slow_window: int = Field(default=30, ge=3, le=200)
     min_trade_notional: float = Field(default=10.0, ge=0)
@@ -88,6 +89,12 @@ class PilotReconciliationResolutionRequest(BaseModel):
 
 class PilotReportRequest(BaseModel):
     live_order_id: str
+
+
+class PilotSignoffRequest(BaseModel):
+    live_order_id: str
+    decision: str = Field(default="approved_for_next_tiny_pilot")
+    notes: str | None = None
 
 
 class EmergencyHaltRequest(BaseModel):
@@ -219,6 +226,26 @@ async def build_manual_live_pilot_report(request: PilotReportRequest, current_us
 @api_router.get("/live-trading/pilot/reports")
 async def list_manual_live_pilot_reports(current_user: dict = Depends(get_current_user), limit: int = 100):
     return await ManualLivePilotWorkflowServiceV2(db).list_pilot_reports(current_user["id"], limit=limit)
+
+
+@api_router.get("/live-trading/pilot/expansion-status")
+async def get_manual_live_pilot_expansion_status(current_user: dict = Depends(get_current_user)):
+    return await ManualLivePilotReviewServiceV2(db).expansion_status(current_user["id"])
+
+
+@api_router.post("/live-trading/pilot/signoff")
+async def signoff_manual_live_pilot_report(request: PilotSignoffRequest, current_user: dict = Depends(get_current_user)):
+    return await ManualLivePilotReviewServiceV2(db).signoff_report(user_id=current_user["id"], live_order_id=request.live_order_id, operator_id=current_user["id"], decision=request.decision, notes=request.notes)
+
+
+@api_router.get("/live-trading/pilot/signoffs")
+async def list_manual_live_pilot_signoffs(current_user: dict = Depends(get_current_user), limit: int = 100):
+    return await ManualLivePilotReviewServiceV2(db).list_signoffs(current_user["id"], limit=limit)
+
+
+@api_router.post("/live-trading/pilot/unresolved-reconciliation-alerts")
+async def emit_manual_live_unresolved_reconciliation_alerts(current_user: dict = Depends(get_current_user)):
+    return await ManualLivePilotReviewServiceV2(db).emit_unresolved_reconciliation_alerts(current_user["id"])
 
 
 @api_router.post("/live-trading/market-buy")
