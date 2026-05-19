@@ -93,3 +93,58 @@ export async function getLiveReadonlyStatus() {
   const response = await apiClient.get('/live-readonly/status');
   return response.data;
 }
+
+export async function getPilotReadiness() {
+  const response = await apiClient.get('/live-trading/pilot-readiness');
+  return response.data;
+}
+
+export async function getPilotExpansionStatus() {
+  const response = await apiClient.get('/live-trading/pilot/expansion-status');
+  return response.data;
+}
+
+export async function getPilotPendingReconciliation(limit = 100) {
+  const response = await apiClient.get(`/live-trading/pilot/pending-reconciliation?limit=${limit}`);
+  return response.data;
+}
+
+export async function getPilotReports(limit = 100) {
+  const response = await apiClient.get(`/live-trading/pilot/reports?limit=${limit}`);
+  return response.data;
+}
+
+export async function getPilotSignoffs(limit = 100) {
+  const response = await apiClient.get(`/live-trading/pilot/signoffs?limit=${limit}`);
+  return response.data;
+}
+
+export async function resolvePilotReconciliation({ liveOrderId, resolution, notes }) {
+  const response = await apiClient.post('/live-trading/pilot/resolve-reconciliation', {
+    live_order_id: liveOrderId,
+    resolution,
+    notes,
+  });
+  return response.data;
+}
+
+export async function buildPilotReport(liveOrderId) {
+  const response = await apiClient.post('/live-trading/pilot/report', {
+    live_order_id: liveOrderId,
+  });
+  return response.data;
+}
+
+export async function signoffPilotReport({ liveOrderId, decision, notes }) {
+  const response = await apiClient.post('/live-trading/pilot/signoff', {
+    live_order_id: liveOrderId,
+    decision,
+    notes,
+  });
+  return response.data;
+}
+
+export async function emitPilotReconciliationAlerts() {
+  const response = await apiClient.post('/live-trading/pilot/unresolved-reconciliation-alerts');
+  return response.data;
+}
