@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import './App.css';
 import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
+import PilotReviewPage from './components/PilotReviewPage';
 import { Toaster } from './components/ui/sonner';
 import { apiClient, API_BASE_URL } from './lib/apiClient';
 
@@ -67,6 +68,16 @@ function App() {
             element={
               isAuthenticated ? (
                 <Dashboard user={user} onLogout={handleLogout} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/pilot-review"
+            element={
+              isAuthenticated ? (
+                <PilotReviewPage user={user} onLogout={handleLogout} />
               ) : (
                 <Navigate to="/" replace />
               )
