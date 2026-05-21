@@ -61,6 +61,15 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run backend tests
         run: python -m pytest tests --cov=. --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+      - name: Run Phase 9 targeted backend validation
+        run: |
+          python -m pytest \
+            tests/test_phase9_route_import_validation.py \
+            tests/test_phase9_mongo_index_validation.py \
+            tests/test_phase5_manual_live_pilot_readiness.py \
+            tests/test_phase6_manual_live_pilot_workflow.py \
+            tests/test_phase7_pilot_review_control.py \
+            -q
       - name: Upload backend coverage artifact
         uses: actions/upload-artifact@v4
         with:
@@ -120,6 +129,8 @@ jobs:
         run: npm run lint
       - name: Test frontend
         run: npm test -- --watchAll=false --passWithNoTests
+      - name: Run Phase 9 targeted frontend validation
+        run: npm test -- --watchAll=false --runTestsByPath src/__tests__/phase9-pilot-review-ui.test.js
       - name: Build frontend
         run: npm run build
 
