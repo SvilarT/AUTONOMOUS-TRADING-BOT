@@ -70,6 +70,12 @@ jobs:
             tests/test_phase6_manual_live_pilot_workflow.py \
             tests/test_phase7_pilot_review_control.py \
             -q
+      - name: Run Phase 10 secret hardening validation
+        run: |
+          python -m pytest \
+            tests/test_phase10_config_hardening.py \
+            tests/test_phase10_hardening_fail_closed.py \
+            -q
       - name: Upload backend coverage artifact
         uses: actions/upload-artifact@v4
         with:
