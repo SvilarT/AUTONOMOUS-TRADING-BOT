@@ -76,6 +76,8 @@ jobs:
             tests/test_phase10_config_hardening.py \
             tests/test_phase10_hardening_fail_closed.py \
             -q
+      - name: Run Phase 11 dry-run rehearsal validation
+        run: python -m pytest tests/test_phase11_dry_run_rehearsal.py -q
       - name: Upload backend coverage artifact
         uses: actions/upload-artifact@v4
         with:
