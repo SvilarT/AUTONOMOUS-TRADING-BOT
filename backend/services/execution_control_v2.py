@@ -1,6 +1,9 @@
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict
 
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
 
 class ExecutionControlV2:
     def __init__(self, db, lock_ttl_seconds: int = 30):
@@ -25,24 +28,44 @@ class ExecutionControlV2:
     async def acquire_lock(self, user_id: str, symbol: str, side: str) -> Dict[str, Any]:
         key = f"{user_id}:{symbol}:{side}"
         now = self.utc_now()
+        now_iso = now.isoformat()
         expires_at = now + timedelta(seconds=self.lock_ttl_seconds)
-        existing = await self.db.execution_locks.find_one({"key": key}, {"_id": 0})
-        if existing:
-            existing_expiry = existing.get("expires_at")
-            if isinstance(existing_expiry, str):
-                try:
-                    existing_expiry = datetime.fromisoformat(existing_expiry)
-                except ValueError:
-                    existing_expiry = None
-            if existing_expiry and existing_expiry > now:
-                return {"acquired": False, "key": key, "reason": "execution lock active"}
+        expires_at_iso = expires_at.isoformat()
 
-        await self.db.execution_locks.update_one(
-            {"key": key},
-            {"$set": {"key": key, "user_id": user_id, "symbol": symbol, "side": side, "expires_at": expires_at.isoformat(), "updated_at": now.isoformat()}},
-            upsert=True,
-        )
-        return {"acquired": True, "key": key, "expires_at": expires_at.isoformat()}
+        try:
+            acquired = await self.db.execution_locks.find_one_and_update(
+                {
+                    "key": key,
+                    "$or": [
+                        {"expires_at": {"$lte": now_iso}},
+                        {"expires_at": {"$exists": False}},
+                    ],
+                },
+                {
+                    "$set": {
+                        "key": key,
+                        "user_id": user_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "expires_at": expires_at_iso,
+                        "updated_at": now_iso,
+                    },
+                    "$setOnInsert": {"created_at": now_iso},
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+                projection={"_id": 0},
+            )
+        except DuplicateKeyError:
+            return {"acquired": False, "key": key, "reason": "execution lock active"}
+
+        if not acquired:
+            return {"acquired": False, "key": key, "reason": "execution lock active"}
+
+        if acquired.get("updated_at") != now_iso:
+            return {"acquired": False, "key": key, "reason": "execution lock active"}
+
+        return {"acquired": True, "key": key, "expires_at": expires_at_iso}
 
     async def release_lock(self, key: str) -> None:
         await self.db.execution_locks.delete_one({"key": key})
