@@ -3,10 +3,9 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.cors import CORSMiddleware
 
 from api_routes import api_router
-from app_state import db, lifespan
+from app_state import lifespan
 from runtime_config import CORS_ORIGINS
 from services.api_errors_v2 import http_exception_handler, unhandled_exception_handler, validation_exception_handler
-from services.operational_readiness_v2 import OperationalReadinessServiceV2
 from services.request_context_v2 import RequestContextMiddlewareV2
 from services.scope_enforcement_middleware_v2 import ScopeEnforcementMiddlewareV2
 from services.security_headers_v2 import SecurityHeadersMiddlewareV2
@@ -24,8 +23,8 @@ def create_app() -> FastAPI:
         return {"status": "ok", "service": "Autonomous Trading Bot"}
 
     @app.get("/readyz")
-    async def readyz(strict: bool = False):
-        return await OperationalReadinessServiceV2().readiness(db, strict=strict)
+    async def readyz():
+        return {"status": "ready", "service": "Autonomous Trading Bot"}
 
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
