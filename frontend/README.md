@@ -1,70 +1,166 @@
-# Getting Started with Create React App
+# Autonomous Trading Bot Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React operator dashboard for the Autonomous Trading Bot platform.
 
-## Available Scripts
+This frontend is not a generic Create React App demo. It is the browser-facing control surface for authentication, portfolio visibility, risk telemetry, bot controls, live-readonly/manual-live readiness views, and pilot-review workflows exposed by the FastAPI backend.
 
-In the project directory, you can run:
+---
 
-### `npm start`
+## Runtime Role
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+The frontend provides the operator UI for:
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+- user signup and login;
+- authenticated dashboard access;
+- portfolio, trade, position, risk, and market-analysis views;
+- bot start/stop controls for paper/simulation workflows;
+- system status and readiness visibility;
+- pilot-review workflows at `/pilot-review`.
 
-### `npm test`
+The app expects the backend API to be available through `REACT_APP_BACKEND_URL`.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+---
 
-### `npm run build`
+## Key Routes
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+| Route | Purpose |
+|---|---|
+| `/` | Login/signup screen when unauthenticated; redirects authenticated users to `/dashboard`. |
+| `/dashboard` | Main authenticated operator dashboard. |
+| `/pilot-review` | Authenticated manual-live pilot review and signoff surface. |
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+Authentication tokens and user metadata are stored in browser `localStorage` by the current app implementation.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+---
 
-### `npm run eject`
+## Local Development
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+From the repository root, the recommended full-stack path is:
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+cp .env.example .env
+docker compose up --build
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+For frontend-only development:
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```bash
+cd frontend
+npm install --legacy-peer-deps
+REACT_APP_BACKEND_URL=http://localhost:8000 npm start
+```
 
-## Learn More
+The development server runs at:
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```text
+http://localhost:3000
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+---
 
-### Code Splitting
+## Environment Variables
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+| Variable | Required | Example | Description |
+|---|---:|---|---|
+| `REACT_APP_BACKEND_URL` | Yes | `http://localhost:8000` | Base URL for the FastAPI backend. |
+| `CI` | No | `false` | Used by CI/build scripts to control Create React App test behavior. |
 
-### Analyzing the Bundle Size
+For Docker Compose, the frontend image receives `REACT_APP_BACKEND_URL` as a build argument.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+---
 
-### Making a Progressive Web App
+## Scripts
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+```bash
+npm start
+```
 
-### Advanced Configuration
+Runs the local development server.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+```bash
+npm test -- --watchAll=false
+```
 
-### Deployment
+Runs the frontend test suite once.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+```bash
+npm run lint
+```
 
-### `npm run build` fails to minify
+Runs ESLint over `src` with the configured warning threshold.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+```bash
+npm run build
+```
+
+Builds the production static bundle into `build/`.
+
+---
+
+## Backend Contract
+
+The frontend talks to the backend through the shared API client in:
+
+```text
+src/lib/apiClient.js
+```
+
+The API client handles:
+
+- backend base URL resolution;
+- bearer-token injection;
+- request ID propagation;
+- normalized backend error envelopes;
+- dashboard/readiness/worker helper calls.
+
+Backend health and readiness endpoints:
+
+```text
+http://localhost:8000/healthz
+http://localhost:8000/readyz
+```
+
+---
+
+## Safety Posture
+
+The frontend is an operator dashboard. It does not independently approve live trading.
+
+Live execution remains controlled by backend-side gates, including trading mode, kill switches, symbol allowlists, notional caps, manual approval requirements, audit records, reconciliation requirements, and release gates.
+
+Do not treat a visible frontend control as sufficient authorization for live trading. The backend is the source of truth for execution permission.
+
+---
+
+## Validation
+
+Frontend validation is part of the repository CI pipeline:
+
+- dependency installation;
+- ESLint;
+- React tests;
+- targeted pilot-review UI tests;
+- production build;
+- Docker image build;
+- Docker Compose smoke test.
+
+Run locally before opening frontend changes:
+
+```bash
+cd frontend
+npm install --legacy-peer-deps
+npm run lint
+npm test -- --watchAll=false
+npm run build
+```
+
+---
+
+## Related Project Docs
+
+See the repository root for the full system-level documentation:
+
+- `README.md` — project overview, safety model, setup, and roadmap status;
+- `ARCHITECTURE.md` — backend/frontend/runtime topology;
+- `PRODUCTION_ROADMAP.md` — staged readiness plan;
+- `docs/` — phase-specific readiness and operations notes.
