@@ -1,4 +1,5 @@
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from services.execution_control_v2 import ExecutionControlV2
 from services.execution_service_v2 import ExecutionServiceV2
@@ -23,10 +24,51 @@ class FakeCursor:
 class FakeCollection:
     def __init__(self):
         self.docs = []
+        self.raise_duplicate_on_find_one_and_update = False
+
+    def _matches(self, doc, query):
+        for key, value in query.items():
+            if key == "$or":
+                if not any(self._matches(doc, item) for item in value):
+                    return False
+            elif isinstance(value, dict):
+                if "$lte" in value and not doc.get(key, "") <= value["$lte"]:
+                    return False
+                if "$exists" in value and (key in doc) != value["$exists"]:
+                    return False
+            elif doc.get(key) != value:
+                return False
+        return True
 
     async def find_one(self, query, projection=None, sort=None):
-        matches = [doc for doc in self.docs if all(doc.get(k) == v for k, v in query.items())]
+        matches = [doc for doc in self.docs if self._matches(doc, query)]
         return dict(matches[0]) if matches else None
+
+    async def find_one_and_update(self, query, update, upsert=False, return_document=None, projection=None):
+        if self.raise_duplicate_on_find_one_and_update:
+            raise DuplicateKeyError("duplicate execution lock")
+        doc = None
+        for existing in self.docs:
+            if self._matches(existing, query):
+                doc = existing
+                break
+        if doc is None:
+            if not upsert:
+                return None
+            key = query.get("key")
+            if key and any(existing.get("key") == key for existing in self.docs):
+                return None
+            doc = {"key": key} if key else {}
+            self.docs.append(doc)
+        for key, value in update.get("$set", {}).items():
+            doc[key] = value
+        for key, value in update.get("$setOnInsert", {}).items():
+            doc.setdefault(key, value)
+        for key, value in update.get("$inc", {}).items():
+            doc[key] = doc.get(key, 0) + value
+        if projection and projection.get("_id") == 0:
+            return {key: value for key, value in doc.items() if key != "_id"}
+        return dict(doc)
 
     async def insert_one(self, doc):
         self.docs.append(dict(doc))
@@ -34,7 +76,7 @@ class FakeCollection:
     async def update_one(self, query, update, upsert=False):
         doc = None
         for existing in self.docs:
-            if all(existing.get(k) == v for k, v in query.items()):
+            if self._matches(existing, query):
                 doc = existing
                 break
         if doc is None:
@@ -48,10 +90,10 @@ class FakeCollection:
             doc[key] = doc.get(key, 0) + value
 
     async def delete_one(self, query):
-        self.docs = [doc for doc in self.docs if not all(doc.get(k) == v for k, v in query.items())]
+        self.docs = [doc for doc in self.docs if not self._matches(doc, query)]
 
     def find(self, query, projection=None):
-        matches = [dict(doc) for doc in self.docs if all(doc.get(k) == v for k, v in query.items())]
+        matches = [dict(doc) for doc in self.docs if self._matches(doc, query)]
         return FakeCursor(matches)
 
 
@@ -121,6 +163,18 @@ async def test_execution_control_locks_and_idempotency():
     assert await control.already_executed(key) is False
     await db.trades_v2.insert_one({"idempotency_key": key, "status": "filled"})
     assert await control.already_executed(key) is True
+
+
+@pytest.mark.asyncio
+async def test_execution_control_denies_duplicate_key_race():
+    db = FakeDB()
+    db.execution_locks.raise_duplicate_on_find_one_and_update = True
+    control = ExecutionControlV2(db, lock_ttl_seconds=60)
+
+    result = await control.acquire_lock("user-1", "BTC-USD", "BUY")
+
+    assert result["acquired"] is False
+    assert result["reason"] == "execution lock active"
 
 
 @pytest.mark.asyncio
