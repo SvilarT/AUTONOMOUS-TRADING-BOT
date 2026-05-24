@@ -1,9 +1,43 @@
 [project]
-name = "repl-nix-workspace"
+name = "autonomous-trading-bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Full-stack cryptocurrency trading research platform with paper trading, risk controls, reconciliation, and staged live-readiness gates."
+readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "protobuf==6.33.5",
-    "requests>=2.32.5",
+license = { text = "MIT" }
+authors = [
+    { name = "SvilarT" },
 ]
+keywords = [
+    "trading",
+    "paper-trading",
+    "fastapi",
+    "react",
+    "mongodb",
+    "risk-management",
+    "backtesting",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/SvilarT/AUTONOMOUS-TRADING-BOT"
+Repository = "https://github.com/SvilarT/AUTONOMOUS-TRADING-BOT"
+Issues = "https://github.com/SvilarT/AUTONOMOUS-TRADING-BOT/issues"
+
+[tool.autonomous-trading-bot]
+backend = "backend/"
+frontend = "frontend/"
+compose_file = "docker-compose.yml"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
