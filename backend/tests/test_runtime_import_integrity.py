@@ -1,5 +1,6 @@
 import os
 
+# Runtime import regression coverage for the autonomous paper service graph.
 os.environ.setdefault("DEBUG", "True")
 os.environ.setdefault("JWT_SECRET", "test-secret-for-runtime-import-integrity-more-than-32-chars")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
