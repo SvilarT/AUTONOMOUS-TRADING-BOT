@@ -17,7 +17,7 @@ class StrategyServiceV2:
     @staticmethod
     def _returns(prices: list[float]) -> list[float]:
         returns = []
-        for previous, current in zip(prices, prices[1:]):
+        for previous, current in zip(prices, prices[1:], strict=False):
             if previous:
                 returns.append((current - previous) / previous)
         return returns
