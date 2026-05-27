@@ -1,5 +1,7 @@
-from typing import Any
+from __future__ import annotations
+
 from statistics import mean, pstdev
+from typing import Any
 
 
 class StrategyServiceV2:
@@ -55,8 +57,10 @@ class StrategyServiceV2:
         zscore_20 = self._zscore(last, clean_prices[-20:])
         high20 = max(clean_prices[-20:])
         low20 = min(clean_prices[-20:])
-        range_position = (last - low20) / (high20 - low20) if high20 > low20 else 0.5
         trend_spread = (sma10 - sma30) / sma30 if sma30 else 0.0
+        range_position = 0.5
+        if high20 > low20:
+            range_position = (last - low20) / (high20 - low20)
 
         return {
             "history": len(clean_prices),
@@ -75,7 +79,11 @@ class StrategyServiceV2:
             "trend_spread": round(trend_spread, 8),
         }
 
-    def generate_signal(self, prices: list[float], has_position: bool) -> dict[str, Any]:
+    def generate_signal(
+        self,
+        prices: list[float],
+        has_position: bool,
+    ) -> dict[str, Any]:
         features = self.features(prices)
         if not features.get("sufficient_history"):
             return {
@@ -121,7 +129,12 @@ class StrategyServiceV2:
             score *= 0.75
             reasons.append("volatility haircut applied")
 
-        action = "BUY" if score >= 1.25 else "SELL" if score <= -1.25 else "HOLD"
+        action = "HOLD"
+        if score >= 1.25:
+            action = "BUY"
+        elif score <= -1.25:
+            action = "SELL"
+
         if has_position and action == "BUY":
             action = "HOLD"
             reasons.append("already positioned")
