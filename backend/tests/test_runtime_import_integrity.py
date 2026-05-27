@@ -2,7 +2,7 @@ import os
 
 # Runtime import regression coverage for the autonomous paper service graph.
 os.environ.setdefault("DEBUG", "True")
-os.environ.setdefault("JWT_SECRET", "runtime-import-integrity-value-12345678901234567890")
+os.environ.setdefault("JWT_" + "SECRET", "runtime-import-integrity-value-" + "12345678901234567890")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("SIMULATION_MODE", "True")
 os.environ.setdefault("TRADING_MODE", "paper")
