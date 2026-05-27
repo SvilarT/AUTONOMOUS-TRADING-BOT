@@ -1,5 +1,5 @@
+from typing import Any
 from statistics import mean, pstdev
-from typing import Any, Dict, List
 
 
 class StrategyServiceV2:
@@ -15,7 +15,7 @@ class StrategyServiceV2:
     MIN_HISTORY = 30
 
     @staticmethod
-    def _returns(prices: List[float]) -> List[float]:
+    def _returns(prices: list[float]) -> list[float]:
         returns = []
         for previous, current in zip(prices, prices[1:]):
             if previous:
@@ -23,7 +23,7 @@ class StrategyServiceV2:
         return returns
 
     @staticmethod
-    def _zscore(value: float, window: List[float]) -> float:
+    def _zscore(value: float, window: list[float]) -> float:
         if not window:
             return 0.0
         avg = mean(window)
@@ -36,7 +36,7 @@ class StrategyServiceV2:
     def _safe_pct_change(current: float, previous: float) -> float:
         return (current - previous) / previous if previous else 0.0
 
-    def features(self, prices: List[float]) -> Dict[str, Any]:
+    def features(self, prices: list[float]) -> dict[str, Any]:
         clean_prices = [float(price) for price in prices if float(price) > 0]
         if len(clean_prices) < self.MIN_HISTORY:
             return {
@@ -75,7 +75,7 @@ class StrategyServiceV2:
             "trend_spread": round(trend_spread, 8),
         }
 
-    def generate_signal(self, prices: List[float], has_position: bool) -> Dict[str, Any]:
+    def generate_signal(self, prices: list[float], has_position: bool) -> dict[str, Any]:
         features = self.features(prices)
         if not features.get("sufficient_history"):
             return {
@@ -88,7 +88,7 @@ class StrategyServiceV2:
             }
 
         score = 0.0
-        reasons: List[str] = []
+        reasons: list[str] = []
 
         trend_spread = float(features.get("trend_spread", 0.0))
         momentum_10 = float(features.get("momentum_10", 0.0))
