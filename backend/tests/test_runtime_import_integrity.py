@@ -2,7 +2,7 @@ import os
 
 # Runtime import regression coverage for the autonomous paper service graph.
 os.environ.setdefault("DEBUG", "True")
-os.environ.setdefault("JWT_SECRET", "test-secret-for-runtime-import-integrity-more-than-32-chars")
+os.environ.setdefault("JWT_SECRET", "runtime-import-integrity-value-12345678901234567890")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("SIMULATION_MODE", "True")
 os.environ.setdefault("TRADING_MODE", "paper")
@@ -23,13 +23,13 @@ def test_runtime_critical_services_import():
     from services.strategy_ensemble_v2 import StrategyEnsembleV2
     from services.strategy_service_v2 import StrategyServiceV2
 
-    assert create_app
-    assert BotEngine
-    assert BotManager
-    assert LiveTradingServiceV2
-    assert SignalPlannerV2
-    assert StrategyEnsembleV2
-    assert StrategyServiceV2
+    assert create_app is not None
+    assert BotEngine is not None
+    assert BotManager is not None
+    assert LiveTradingServiceV2 is not None
+    assert SignalPlannerV2 is not None
+    assert StrategyEnsembleV2 is not None
+    assert StrategyServiceV2 is not None
 
 
 def test_strategy_service_contract_and_planner_output_are_compatible():
