@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from services.allocator_v2 import AllocatorV2
 from services.execution_optimizer_v2 import ExecutionOptimizerV2
@@ -7,7 +7,7 @@ from services.strategy_ensemble_v2 import StrategyEnsembleV2
 
 
 class SignalPlannerV2:
-    def __init__(self):
+    def __init__(self) -> None:
         self.exec_opt = ExecutionOptimizerV2()
         self.ensemble = StrategyEnsembleV2()
         self.allocator = AllocatorV2()
@@ -16,12 +16,12 @@ class SignalPlannerV2:
     def build_plan(
         self,
         symbol: str,
-        prices: List[float],
+        prices: list[float],
         has_position: bool,
         base_notional: float = 100.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if len(prices) < 30:
-            return {"symbol": symbol, "action": "HOLD", "reason": "insufficient price history"}
+            return {"symbol": symbol, "action": "HOLD", "notional": 0.0, "reason": "insufficient price history"}
 
         regime = self.regime.classify(prices)
         signals = self.ensemble.generate_all(prices, has_position=has_position)
@@ -32,20 +32,24 @@ class SignalPlannerV2:
             signals = [signal for signal in signals if signal["strategy"] != "mean_reversion"]
 
         allocation = self.allocator.allocate(signals, base_notional=base_notional)
+        selected = allocation.get("selected") or {}
+        action = allocation.get("action", "HOLD")
         volatility = abs((prices[-1] - prices[-10]) / prices[-10]) if prices[-10] else 0.0
-        final_notional = self.exec_opt.shape_notional(
-            allocation.get("notional", 0.0),
-            allocation.get("selected", {}).get("confidence", 50.0),
-            volatility,
-        )
+        final_notional = 0.0
+        if action != "HOLD":
+            final_notional = self.exec_opt.shape_notional(
+                allocation.get("notional", 0.0),
+                selected.get("confidence", 50.0),
+                volatility,
+            )
 
         return {
             "symbol": symbol,
-            "action": allocation.get("action", "HOLD"),
+            "action": action,
             "regime": regime,
             "signals": signals,
             "allocation": allocation,
-            "selected": allocation.get("selected", {}),
+            "selected": selected,
             "notional": final_notional,
             "volatility": volatility,
         }

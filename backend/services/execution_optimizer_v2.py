@@ -12,6 +12,8 @@ class ExecutionOptimizerV2:
         }
 
     def shape_notional(self, base_notional: float, confidence: float, volatility: float):
+        if base_notional <= 0:
+            return 0.0
         costs = self.estimate_costs(confidence, volatility)
         penalty = 1 - min(0.35, costs["total_cost"] * 20)
-        return max(25.0, base_notional * penalty)
+        return round(max(25.0, base_notional * penalty), 8)
