@@ -21,7 +21,7 @@ class SignalPlannerV2:
         base_notional: float = 100.0,
     ) -> Dict[str, Any]:
         if len(prices) < 30:
-            return {"symbol": symbol, "action": "HOLD", "reason": "insufficient price history"}
+            return {"symbol": symbol, "action": "HOLD", "notional": 0.0, "reason": "insufficient price history"}
 
         regime = self.regime.classify(prices)
         signals = self.ensemble.generate_all(prices, has_position=has_position)
@@ -32,20 +32,24 @@ class SignalPlannerV2:
             signals = [signal for signal in signals if signal["strategy"] != "mean_reversion"]
 
         allocation = self.allocator.allocate(signals, base_notional=base_notional)
+        selected = allocation.get("selected") or {}
+        action = allocation.get("action", "HOLD")
         volatility = abs((prices[-1] - prices[-10]) / prices[-10]) if prices[-10] else 0.0
-        final_notional = self.exec_opt.shape_notional(
-            allocation.get("notional", 0.0),
-            allocation.get("selected", {}).get("confidence", 50.0),
-            volatility,
-        )
+        final_notional = 0.0
+        if action != "HOLD":
+            final_notional = self.exec_opt.shape_notional(
+                allocation.get("notional", 0.0),
+                selected.get("confidence", 50.0),
+                volatility,
+            )
 
         return {
             "symbol": symbol,
-            "action": allocation.get("action", "HOLD"),
+            "action": action,
             "regime": regime,
             "signals": signals,
             "allocation": allocation,
-            "selected": allocation.get("selected", {}),
+            "selected": selected,
             "notional": final_notional,
             "volatility": volatility,
         }
