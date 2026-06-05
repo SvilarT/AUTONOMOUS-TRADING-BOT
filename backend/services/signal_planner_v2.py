@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from services.allocator_v2 import AllocatorV2
 from services.execution_optimizer_v2 import ExecutionOptimizerV2
@@ -7,7 +7,7 @@ from services.strategy_ensemble_v2 import StrategyEnsembleV2
 
 
 class SignalPlannerV2:
-    def __init__(self):
+    def __init__(self) -> None:
         self.exec_opt = ExecutionOptimizerV2()
         self.ensemble = StrategyEnsembleV2()
         self.allocator = AllocatorV2()
@@ -16,10 +16,10 @@ class SignalPlannerV2:
     def build_plan(
         self,
         symbol: str,
-        prices: List[float],
+        prices: list[float],
         has_position: bool,
         base_notional: float = 100.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if len(prices) < 30:
             return {"symbol": symbol, "action": "HOLD", "notional": 0.0, "reason": "insufficient price history"}
 
