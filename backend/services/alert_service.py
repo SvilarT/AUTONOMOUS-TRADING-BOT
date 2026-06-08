@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 
 import aiohttp
 
@@ -12,9 +12,9 @@ class AlertService:
 
     @staticmethod
     def utc_now() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
 
-    async def _deliver_webhook(self, alert: Dict[str, Any]) -> Dict[str, Any]:
+    async def _deliver_webhook(self, alert: dict[str, Any]) -> dict[str, Any]:
         webhook_url = SETTINGS.ops_alert_webhook_url
         if not webhook_url:
             return {"configured": False, "status": "not_configured"}
@@ -22,7 +22,11 @@ class AlertService:
             timeout = aiohttp.ClientTimeout(total=3)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(webhook_url, json={"event": "autonomous_trading_bot_alert", "alert": alert}) as response:
-                    return {"configured": True, "status": "delivered" if 200 <= response.status < 300 else "failed", "http_status": response.status}
+                    return {
+                        "configured": True,
+                        "status": "delivered" if 200 <= response.status < 300 else "failed",
+                        "http_status": response.status,
+                    }
         except Exception as exc:
             return {"configured": True, "status": "failed", "error": exc.__class__.__name__}
 
@@ -32,8 +36,8 @@ class AlertService:
         alert_type: str,
         severity: str,
         message: str,
-        context: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         alert = {
             "user_id": user_id,
             "type": alert_type,

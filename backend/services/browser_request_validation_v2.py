@@ -1,10 +1,10 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from services.api_errors_v2 import error_envelope
+from services.request_context_v2 import get_request_id
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from services.api_errors_v2 import error_envelope
 from services.browser_session_v2 import SESSION_COOKIE_NAME, bearer_token_from_request, csrf_tokens_match
-from services.request_context_v2 import get_request_id
 
 
 class CookieCSRFMiddlewareV2(BaseHTTPMiddleware):

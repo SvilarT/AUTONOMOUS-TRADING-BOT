@@ -8,11 +8,11 @@ from dotenv import load_dotenv
 from fastapi.security import HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
+from services.bot_manager import BotManager
+from services.structured_logging import configure_logging, log_event
 
 from runtime_config import API_EMBED_BOT_MANAGER, RUN_MONGO_INDEX_BOOTSTRAP, RUNTIME_ROLE
-from services.bot_manager import BotManager
 from services.mongo_indexes_v2 import MongoIndexServiceV2
-from services.structured_logging import configure_logging, log_event
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")

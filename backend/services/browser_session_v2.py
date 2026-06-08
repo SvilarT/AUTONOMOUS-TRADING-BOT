@@ -1,6 +1,5 @@
 import hmac
 import secrets
-from typing import Optional
 
 from fastapi import Request, Response
 
@@ -11,7 +10,7 @@ CSRF_COOKIE_NAME = "atb_csrf"
 SESSION_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
-def bearer_token_from_request(request: Request) -> Optional[str]:
+def bearer_token_from_request(request: Request) -> str | None:
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() == "bearer" and token:
@@ -19,7 +18,7 @@ def bearer_token_from_request(request: Request) -> Optional[str]:
     return None
 
 
-def session_token_from_request(request: Request) -> Optional[str]:
+def session_token_from_request(request: Request) -> str | None:
     return bearer_token_from_request(request) or request.cookies.get(SESSION_COOKIE_NAME)
 
 

@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from services.api_errors_v2 import http_exception_handler, unhandled_exception_handler, validation_exception_handler
+from services.request_context_v2 import RequestContextMiddlewareV2
 from starlette.middleware.cors import CORSMiddleware
 
 from api_routes import api_router
 from app_state import lifespan
 from runtime_config import CORS_ORIGINS
-from services.api_errors_v2 import http_exception_handler, unhandled_exception_handler, validation_exception_handler
 from services.browser_request_validation_v2 import CookieCSRFMiddlewareV2
-from services.request_context_v2 import RequestContextMiddlewareV2
 from services.scope_enforcement_middleware_v2 import ScopeEnforcementMiddlewareV2
 from services.security_headers_v2 import SecurityHeadersMiddlewareV2
 

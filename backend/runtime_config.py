@@ -1,5 +1,3 @@
-from typing import List
-
 from pydantic import ValidationError
 
 from services.settings_v2 import SETTINGS, RuntimeRole, SettingsV2
@@ -9,7 +7,7 @@ def env_bool(name: str, default: bool = False) -> bool:
     return SettingsV2.env_bool(name, default)
 
 
-def parse_csv_env(name: str, default: str) -> List[str]:
+def parse_csv_env(name: str, default: str) -> list[str]:
     import os
 
     return SettingsV2.parse_csv(os.environ.get(name, default))
@@ -35,7 +33,7 @@ def validate_origin(origin: str) -> None:
         _raise_runtime_error(exc)
 
 
-def validate_cors_origins(origins: List[str], debug: bool) -> None:
+def validate_cors_origins(origins: list[str], debug: bool) -> None:
     try:
         SettingsV2(debug=debug, jwt_secret="debug" if debug else "x" * 32, cors_origins=origins)
     except ValidationError as exc:

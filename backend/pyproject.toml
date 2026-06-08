@@ -40,6 +40,11 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"api_live_security_routes_v2.py" = ["B008"]
+"api_routes_v2.py" = ["B008"]
+"auth_core.py" = ["B008", "S105"]
+"runtime_config.py" = ["S106"]
+"services/settings_v2.py" = ["S105"]
 "tests/**/*.py" = ["S101", "S105", "S106", "S311"]
 
 [tool.bandit]
