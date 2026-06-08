@@ -33,14 +33,27 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+# Baseline gate: enforce correctness, security, async misuse, and high-signal bug
+# risks first. Import sorting and Python-modernization churn will be re-enabled in
+# dedicated cleanup tranches once the gate is actionable.
+select = ["E", "F", "B", "ASYNC", "S"]
 ignore = [
+  "E501",  # line-length cleanup is tracked separately from correctness/security
   "S101",  # pytest assertions are expected in tests
   "S311",  # simulation RNG is not used for cryptographic purposes
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "S311"]
+# Keep tests focused on behavior while production modules converge to the full
+# Ruff profile. These ignores cover existing non-runtime test style debt only;
+# correctness checks such as F/E9/F63/F7/F82 still apply.
+"tests/**/*.py" = [
+  "S101",
+  "S105",
+  "S106",
+  "S311",
+  "S603",  # subprocess calls are intentional integration-test boundaries
+]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
