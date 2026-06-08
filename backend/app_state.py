@@ -26,7 +26,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 bot_manager = None
 manager_task = None
 
