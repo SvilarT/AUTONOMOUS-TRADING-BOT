@@ -21,6 +21,15 @@ export function createRequestId() {
   return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+export function readCookie(name) {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const prefix = `${name}=`;
+  const value = document.cookie.split('; ').find((item) => item.startsWith(prefix));
+  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+}
+
 export function normalizeApiError(error) {
   const response = error?.response;
   const envelope = response?.data?.error;
@@ -58,12 +67,16 @@ export function normalizeApiError(error) {
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 15000,
+  withCredentials: true,
 });
 
 apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  const method = String(config.method || 'get').toLowerCase();
+  if (['post', 'put', 'patch', 'delete'].includes(method)) {
+    const csrfToken = readCookie('atb_csrf');
+    if (csrfToken) {
+      config.headers['X-CSRF-Token'] = csrfToken;
+    }
   }
   config.headers['X-Request-ID'] = config.headers['X-Request-ID'] || createRequestId();
   return config;
@@ -73,6 +86,33 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => Promise.reject(normalizeApiError(error))
 );
+
+export async function getCurrentUser() {
+  const response = await apiClient.get('/auth/me');
+  return response.data;
+}
+
+export async function logout() {
+  const response = await apiClient.post('/auth/logout');
+  return response.data;
+}
+
+export async function elevateLiveSession({ password, totpCode }) {
+  const response = await apiClient.post('/live-auth/elevate', {
+    password,
+    totp_code: totpCode || null,
+  });
+  return response.data;
+}
+
+export async function revokeLiveSession(liveSessionToken) {
+  const response = await apiClient.post(
+    '/live-auth/revoke',
+    {},
+    { headers: { 'X-Live-Session-Token': liveSessionToken } }
+  );
+  return response.data;
+}
 
 export async function getTradingMode() {
   const response = await apiClient.get('/trading-mode');

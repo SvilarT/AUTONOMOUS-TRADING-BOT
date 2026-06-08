@@ -1,16 +1,16 @@
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
 import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from jwt import ExpiredSignatureError, InvalidTokenError
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app_state import db, logger, pwd_context, security
 from runtime_config import JWT_SECRET
-
+from services.browser_session_v2 import session_token_from_request
 
 AUTH_FAILURE_WINDOW_MINUTES = 15
 AUTH_FAILURE_LIMIT = 8
@@ -21,7 +21,7 @@ class User(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: EmailStr
     password_hash: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class UserCreate(BaseModel):
@@ -37,7 +37,7 @@ class UserLogin(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    user: Dict[str, Any]
+    user: dict[str, Any]
 
 
 def normalize_email(email: str) -> str:
@@ -46,7 +46,7 @@ def normalize_email(email: str) -> str:
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    to_encode.update({"exp": datetime.now(timezone.utc) + timedelta(days=7)})
+    to_encode.update({"exp": datetime.now(UTC) + timedelta(days=7)})
     return jwt.encode(to_encode, JWT_SECRET, algorithm="HS256")
 
 
@@ -62,12 +62,12 @@ def verify_token(token: str):
 
 
 async def recent_auth_failures(email: str) -> int:
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=AUTH_FAILURE_WINDOW_MINUTES)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(minutes=AUTH_FAILURE_WINDOW_MINUTES)).isoformat()
     return await db.auth_failures.count_documents({"email": email, "created_at": {"$gte": cutoff}})
 
 
 async def record_auth_failure(email: str) -> None:
-    await db.auth_failures.insert_one({"email": email, "created_at": datetime.now(timezone.utc).isoformat()})
+    await db.auth_failures.insert_one({"email": email, "created_at": datetime.now(UTC).isoformat()})
 
 
 async def clear_auth_failures(email: str) -> None:
@@ -80,8 +80,12 @@ async def enforce_auth_throttle(email: str) -> None:
         raise HTTPException(status_code=429, detail="Too many failed login attempts. Try again later.")
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    payload = verify_token(credentials.credentials)
+async def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    token = credentials.credentials if credentials else session_token_from_request(request)
+    payload = verify_token(token) if token else None
     if not payload or "user_id" not in payload:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -112,7 +116,7 @@ async def signup(user_data: UserCreate):
         "max_daily_loss": 0.015,
         "risk_target_vol": 0.10,
         "symbols": ["BTC-USD", "ETH-USD"],
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     await db.bot_configs.insert_one(config)
     await clear_auth_failures(email)
@@ -128,7 +132,6 @@ async def login(credentials: UserLogin):
     if not user or not pwd_context.verify(credentials.password, user["password_hash"]):
         await record_auth_failure(email)
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
     await clear_auth_failures(email)
     token = create_access_token({"user_id": user["id"], "email": user["email"]})
     return TokenResponse(access_token=token, user={"id": user["id"], "email": user["email"]})

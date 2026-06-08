@@ -3,6 +3,8 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
 
+from services.settings_v2 import resolve_secret_env
+
 
 class LiveTradingGateError(RuntimeError):
     pass
@@ -58,7 +60,7 @@ class LiveTradingGateV2:
             allowed_symbols=symbols or ("BTC-USD", "ETH-USD"),
             manual_approval_required=cls.env_bool("LIVE_MANUAL_APPROVAL_REQUIRED", True),
             signed_approval_required=cls.env_bool("LIVE_SIGNED_APPROVAL_REQUIRED", True),
-            approval_token=os.getenv("LIVE_APPROVAL_TOKEN"),
+            approval_token=resolve_secret_env("LIVE_APPROVAL_TOKEN") or None,
         )
 
     def describe(self) -> Dict[str, Any]:

@@ -5,7 +5,7 @@ import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import PilotReviewPage from './components/PilotReviewPage';
 import { Toaster } from './components/ui/sonner';
-import { apiClient, API_BASE_URL } from './lib/apiClient';
+import { apiClient, API_BASE_URL, getCurrentUser, logout } from './lib/apiClient';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -13,28 +13,33 @@ function App() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-
-    if (token && savedUser) {
-      setIsAuthenticated(true);
-      setUser(JSON.parse(savedUser));
-    }
-    setLoading(false);
+    const restoreSession = async () => {
+      try {
+        const current = await getCurrentUser();
+        setIsAuthenticated(true);
+        setUser(current.user);
+      } catch (_error) {
+        setIsAuthenticated(false);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    restoreSession();
   }, []);
 
-  const handleLogin = (token, userData) => {
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(userData));
+  const handleLogin = (userData) => {
     setIsAuthenticated(true);
     setUser(userData);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setIsAuthenticated(false);
-    setUser(null);
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      setIsAuthenticated(false);
+      setUser(null);
+    }
   };
 
   if (loading) {
