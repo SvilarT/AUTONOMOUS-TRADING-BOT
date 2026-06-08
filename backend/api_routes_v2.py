@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app_state import db, logger
 from auth_core import TokenResponse, UserCreate, UserLogin, get_current_user, login, signup
 from services.advanced_risk_manager import AdvancedRiskManager
+from services.authorization_v2 import public_user
+from services.browser_session_v2 import clear_browser_session_cookies, set_browser_session_cookies
 from services.market_data_service import MarketDataService
 from services.portfolio_service_v2 import PortfolioServiceV2
 
@@ -29,13 +31,28 @@ def portfolio() -> PortfolioServiceV2:
 
 
 @api_router.post("/auth/signup", response_model=TokenResponse)
-async def signup_route(user_data: UserCreate):
-    return await signup(user_data)
+async def signup_route(user_data: UserCreate, response: Response):
+    token_response = await signup(user_data)
+    set_browser_session_cookies(response, token_response.access_token)
+    return token_response
 
 
 @api_router.post("/auth/login", response_model=TokenResponse)
-async def login_route(credentials: UserLogin):
-    return await login(credentials)
+async def login_route(credentials: UserLogin, response: Response):
+    token_response = await login(credentials)
+    set_browser_session_cookies(response, token_response.access_token)
+    return token_response
+
+
+@api_router.get("/auth/me")
+async def auth_me(current_user: dict = Depends(get_current_user)):
+    return {"user": public_user(current_user)}
+
+
+@api_router.post("/auth/logout")
+async def logout_route(response: Response, current_user: dict = Depends(get_current_user)):
+    clear_browser_session_cookies(response)
+    return {"status": "logged_out", "user_id": current_user["id"]}
 
 
 @api_router.get("/trades")

@@ -10,6 +10,10 @@ os.environ.setdefault("TRADING_MODE", "paper")
 os.environ.setdefault("RUNTIME_ROLE", "api")
 os.environ.setdefault("API_EMBED_BOT_MANAGER", "false")
 os.environ.setdefault("RUN_MONGO_INDEX_BOOTSTRAP", "false")
+os.environ.setdefault("LIVE_MFA_REQUIRED", "false")
+os.environ.setdefault("LIVE_RATE_LIMIT_PER_USER", "100")
+os.environ.setdefault("LIVE_RATE_LIMIT_PER_IP", "100")
+os.environ.setdefault("LIVE_RATE_LIMIT_GLOBAL", "100")
 
 import httpx
 import pytest
@@ -23,11 +27,17 @@ from services.live_approval_challenge_service_v2 import LiveApprovalChallengeErr
 async def cleanup(user_id: str | None = None, email: str | None = None) -> None:
     if email:
         await db.users.delete_many({"email": email})
+        await db.auth_failures.delete_many({"email": email})
     if user_id:
         await db.bot_configs.delete_many({"user_id": user_id})
-        await db.auth_failures.delete_many({"email": email})
         await db.live_approval_challenges.delete_many({"user_id": user_id})
         await db.live_order_audits.delete_many({"user_id": user_id})
+        await db.live_execution_sessions.delete_many({"user_id": user_id})
+        await db.live_idempotency_records.delete_many({"user_id": user_id})
+        await db.live_rate_limit_events.delete_many({"user_id": user_id})
+        await db.live_execution_events.delete_many({"user_id": user_id})
+        await db.live_halts.delete_many({"user_id": user_id})
+        await db.alerts.delete_many({"user_id": user_id})
 
 
 @pytest.mark.asyncio
@@ -110,7 +120,7 @@ async def signup_with_execute_scope(client: httpx.AsyncClient, email: str):
 
 
 @pytest.mark.asyncio
-async def test_non_dry_run_live_order_requires_valid_signed_challenge():
+async def test_non_dry_run_live_order_requires_elevation_idempotency_and_signed_challenge():
     app = create_app()
     email = f"approval-api-{uuid.uuid4().hex}@example.com"
     user_id = None
@@ -119,9 +129,17 @@ async def test_non_dry_run_live_order_requires_valid_signed_challenge():
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             user_id, headers = await signup_with_execute_scope(client, email)
 
+            elevation = await client.post(
+                "/api/live-auth/elevate",
+                headers=headers,
+                json={"password": "LiveApprovalTest123!"},
+            )
+            assert elevation.status_code == 200, elevation.text
+            live_headers = {**headers, "X-Live-Session-Token": elevation.json()["live_session_token"]}
+
             blocked = await client.post(
                 "/api/live-trading/market-buy",
-                headers=headers,
+                headers={**live_headers, "Idempotency-Key": "approval-route-order-0001"},
                 json={"symbol": "BTC-USD", "notional_usd": 5.0, "dry_run": False},
             )
             assert blocked.status_code == 403
@@ -129,7 +147,7 @@ async def test_non_dry_run_live_order_requires_valid_signed_challenge():
 
             challenge = await client.post(
                 "/api/live-approvals/challenge",
-                headers=headers,
+                headers=live_headers,
                 json={"side": "BUY", "symbol": "BTC-USD", "notional_usd": 5.0},
             )
             assert challenge.status_code == 200, challenge.text
@@ -137,7 +155,7 @@ async def test_non_dry_run_live_order_requires_valid_signed_challenge():
 
             reached_route = await client.post(
                 "/api/live-trading/market-buy",
-                headers=headers,
+                headers={**live_headers, "Idempotency-Key": "approval-route-order-0002"},
                 json={"symbol": "BTC-USD", "notional_usd": 5.0, "dry_run": False, "approval_token": approval_token},
             )
             assert reached_route.status_code == 200, reached_route.text
@@ -145,7 +163,7 @@ async def test_non_dry_run_live_order_requires_valid_signed_challenge():
 
             replay = await client.post(
                 "/api/live-trading/market-buy",
-                headers=headers,
+                headers={**live_headers, "Idempotency-Key": "approval-route-order-0003"},
                 json={"symbol": "BTC-USD", "notional_usd": 5.0, "dry_run": False, "approval_token": approval_token},
             )
             assert replay.status_code == 403

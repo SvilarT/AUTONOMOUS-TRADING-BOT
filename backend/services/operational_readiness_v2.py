@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from services.settings_v2 import SETTINGS, SettingsV2, TradingMode
+from services.settings_v2 import SETTINGS, RuntimeRole, SettingsV2, TradingMode
 
 
 class OperationalReadinessServiceV2:
@@ -13,13 +13,7 @@ class OperationalReadinessServiceV2:
 
     @staticmethod
     def _check(name: str, passed: bool, severity: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return {
-            "name": name,
-            "passed": passed,
-            "severity": severity,
-            "message": message,
-            "metadata": metadata or {},
-        }
+        return {"name": name, "passed": passed, "severity": severity, "message": message, "metadata": metadata or {}}
 
     def validate_environment(self, strict: bool = False, settings: SettingsV2 = SETTINGS) -> Dict[str, Any]:
         checks: List[Dict[str, Any]] = []
@@ -42,17 +36,21 @@ class OperationalReadinessServiceV2:
             checks.append(self._check("live_execution_off_in_readonly", not settings.live_trading_enabled, "critical", "LIVE_TRADING_ENABLED must be false in live-readonly mode."))
 
         if settings.trading_mode == TradingMode.LIVE_TRADING:
+            checks.append(self._check("debug_disabled", not settings.debug, "critical", "DEBUG must be false in live-trading mode."))
+            checks.append(self._check("api_worker_process_separated", settings.runtime_role == RuntimeRole.API and not settings.api_embed_bot_manager, "critical", "Live trading requires RUNTIME_ROLE=api and API_EMBED_BOT_MANAGER=false."))
             checks.append(self._check("live_global_gate_enabled", settings.live_trading_enabled, "critical", "LIVE_TRADING_ENABLED must be true for live-trading mode."))
             checks.append(self._check("live_adapter_selected", settings.live_execution_adapter == "coinbase_exchange_v2", "critical", "LIVE_EXECUTION_ADAPTER must be coinbase_exchange_v2."))
-            checks.append(self._check("live_approval_token_configured", bool(settings.live_approval_token), "critical", "LIVE_APPROVAL_TOKEN must be configured for non-dry-run live orders."))
+            checks.append(self._check("live_mfa_enabled", settings.live_mfa_required and bool(settings.live_totp_secret), "critical", "TOTP-backed live-session elevation must be configured."))
+            checks.append(self._check("live_rate_limiting_enabled", settings.live_rate_limiting_enabled, "critical", "Live endpoint rate limiting must remain enabled."))
+            checks.append(self._check("live_idempotency_required", settings.live_idempotency_required, "critical", "Live order idempotency keys must remain required."))
+            checks.append(self._check("ops_admin_configured", settings.ops_admin_enabled and bool(settings.ops_admin_emails), "critical", "OPS admin emails must be configured for emergency operations."))
+            checks.append(self._check("ops_alert_webhook_configured", bool(settings.ops_alert_webhook_url), "critical", "OPS_ALERT_WEBHOOK_URL or OPS_ALERT_WEBHOOK_URL_FILE must be configured."))
+            checks.append(self._check("live_credential_boundary_attested", settings.live_operator_attestation_accepted and settings.live_credentials_withdrawals_disabled_confirmed and settings.live_credentials_transfers_disabled_confirmed and settings.live_credentials_ip_allowlist_confirmed, "critical", "Live credentials must be reviewed: withdrawals disabled, transfers disabled, IP allowlist configured, and operator attestation accepted."))
             checks.append(self._check("live_max_notional_low", settings.live_max_order_notional_usd <= 25.0, "warning", "Initial live max order notional should be <= 25 USD."))
             checks.append(self._check("coinbase_live_key", bool(settings.coinbase_exchange_api_key), "critical", "Coinbase API key required."))
             checks.append(self._check("coinbase_live_secret", bool(settings.coinbase_exchange_api_secret), "critical", "Coinbase API secret required."))
             checks.append(self._check("coinbase_live_passphrase", bool(settings.coinbase_exchange_passphrase), "critical", "Coinbase passphrase required."))
-            checks.append(self._check("live_order_kill_switch_default", settings.coinbase_live_order_kill_switch, "warning", "COINBASE_LIVE_ORDER_KILL_SWITCH should default to true outside approved execution windows."))
-
-        if not settings.debug:
-            checks.append(self._check("debug_disabled", not settings.debug, "critical", "DEBUG must be false in production."))
+            checks.append(self._check("live_order_kill_switch_default", settings.coinbase_live_order_kill_switch, "warning", "COINBASE_LIVE_ORDER_KILL_SWITCH should remain true outside approved execution windows."))
 
         failed_critical = [check for check in checks if not check["passed"] and check["severity"] == "critical"]
         failed_warning = [check for check in checks if not check["passed"] and check["severity"] == "warning"]
@@ -64,11 +62,7 @@ class OperationalReadinessServiceV2:
             "strict": strict,
             "settings": settings.redacted_report(),
             "checks": checks,
-            "summary": {
-                "total": len(checks),
-                "failed_critical": len(failed_critical),
-                "failed_warning": len(failed_warning),
-            },
+            "summary": {"total": len(checks), "failed_critical": len(failed_critical), "failed_warning": len(failed_warning)},
             "generated_at": self.utc_now(),
         }
 
@@ -83,9 +77,4 @@ class OperationalReadinessServiceV2:
         environment = self.validate_environment(strict=strict)
         database = await self.database_health(db)
         status = "ready" if environment["status"] == "ready" and database["status"] == "ready" else "degraded" if database["status"] == "ready" else "blocked"
-        return {
-            "status": status,
-            "environment": environment,
-            "database": database,
-            "checked_at": self.utc_now(),
-        }
+        return {"status": status, "environment": environment, "database": database, "checked_at": self.utc_now()}

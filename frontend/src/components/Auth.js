@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
-import { API } from '../App';
+import { apiClient } from '../lib/apiClient';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card } from './ui/card';
@@ -18,14 +17,12 @@ const Auth = ({ onLogin }) => {
     setLoading(true);
 
     try {
-      const endpoint = isLogin ? `${API}/auth/login` : `${API}/auth/signup`;
-      const response = await axios.post(endpoint, { email, password });
-      
-      const { access_token, user } = response.data;
-      onLogin(access_token, user);
+      const endpoint = isLogin ? '/auth/login' : '/auth/signup';
+      const response = await apiClient.post(endpoint, { email, password });
+      onLogin(response.data.user);
       toast.success(`Welcome ${isLogin ? 'back' : 'aboard'}!`);
     } catch (error) {
-      const message = error.response?.data?.detail || 'Authentication failed';
+      const message = error.message || 'Authentication failed';
       toast.error(message);
     } finally {
       setLoading(false);

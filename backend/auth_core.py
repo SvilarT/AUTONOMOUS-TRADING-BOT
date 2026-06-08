@@ -3,13 +3,14 @@ from typing import Any, Dict
 import uuid
 
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from jwt import ExpiredSignatureError, InvalidTokenError
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app_state import db, logger, pwd_context, security
 from runtime_config import JWT_SECRET
+from services.browser_session_v2 import session_token_from_request
 
 
 AUTH_FAILURE_WINDOW_MINUTES = 15
@@ -80,8 +81,12 @@ async def enforce_auth_throttle(email: str) -> None:
         raise HTTPException(status_code=429, detail="Too many failed login attempts. Try again later.")
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    payload = verify_token(credentials.credentials)
+async def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    token = credentials.credentials if credentials else session_token_from_request(request)
+    payload = verify_token(token) if token else None
     if not payload or "user_id" not in payload:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -128,7 +133,6 @@ async def login(credentials: UserLogin):
     if not user or not pwd_context.verify(credentials.password, user["password_hash"]):
         await record_auth_failure(email)
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
     await clear_auth_failures(email)
     token = create_access_token({"user_id": user["id"], "email": user["email"]})
     return TokenResponse(access_token=token, user={"id": user["id"], "email": user["email"]})

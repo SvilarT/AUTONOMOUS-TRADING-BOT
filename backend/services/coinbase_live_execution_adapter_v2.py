@@ -29,7 +29,7 @@ class CoinbaseLiveExecutionAdapterV2(CoinbaseReadonlyAdapterV2):
 
     @classmethod
     def live_order_kill_switch_enabled(cls) -> bool:
-        return cls.env_bool(cls.kill_switch_env, False)
+        return cls.env_bool(cls.kill_switch_env, True)
 
     @classmethod
     def assert_live_orders_not_killed(cls) -> None:
